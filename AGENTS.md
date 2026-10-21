@@ -321,7 +321,25 @@ runrealfix.cmd        :: real_fix.scr  → out_fix_real/（需 real.dwg）
 | `out_s1000/Sheet001.pdf` | `scaletest1000.scr` 84100×59400，**1:1000** | **84.1 × 59.4** | `ISO_full_bleed_A5_(148×210)` | 是 |
 | `out_merge/test_dwg_合并.pdf` | `fixtest_merge.scr` + `BPPLOT_MERGE=1` | 3 页，页序 = 1189×845.7 / 594.1×841 / 841×594 | — | 书签 = `Sheet001/002/003` |
 
-**提取方法（无需 pymupdf，正则读 `/MediaBox` 即可）**：
+**一键回归**（推荐）：
+
+```cmd
+build_net8.cmd
+test\run_all_net8.cmd        :: 全量：自检 + 出图 + 连跑 + 合并 + 拆分 + 改版次（14 项）
+test\run_golden_net8.cmd     :: 只验页尺寸黄金基线（3 框 1:100）
+```
+
+`run_all_net8.cmd` 会临时写入 `%APPDATA%\BPPlot\config.json`（模拟 `BPTEACH` 的学习结果），**跑完自动还原**：原文件存在则备份后恢复，不存在则删除。别去掉这段——否则会吃掉用户真实的标签配置。
+
+判定核心是 `test/golden_check.py`（正则读 `/MediaBox` 换算 mm，容差 0.6mm），可单独复用：
+
+```cmd
+python test\golden_check.py <pdf目录> 1189.0x845.7 594.1x841.0 841.0x594.0
+```
+
+脚本自带以下纪律（改动前先读）：产物从 `build/bin/Release/net8.0-windows` 取（不是根目录 DLL，也不是旧的手工目录）；`.scr` 里 `USERS2` 必须先设空、`netload` 之后再设真值、最后显式 `BPLOTAUTO`（避开坑 #27 的"加载即出图"分支）；两个脚本的工作区分别是 `test/_golden/` 与 `test/_all/`（均 gitignore）。
+
+**手工提取方法（无需 pymupdf，正则读 `/MediaBox` 即可）**：
 
 ```python
 import re, glob
@@ -369,6 +387,32 @@ for f in sorted(glob.glob('test/out_*/Sheet*.pdf')):
   - `test/loadprobe.cs` + `loadprobe.dll`：Bundle 自动加载机制的**最小探针**（v0.7 用它证明本机构建不支持 bundle 自动加载），属一次性取证资产，保留但不再运行
 - `test/real.dwg`、`test/out_real/`、真实项目日志已在 `.gitignore` 排除，**永不入库**。
 
+### 5.7 无头 GUI / 交互验证（`test/gui/` + `test/fixtures/`）
+
+AutoCAD 插件最难验证的两块——**WinForms 对话框**和**需要交互选点的命令**——已各有可复现的绕过方案，都在 `test/gui/`：
+
+| 资产 | 用途 | 用法 |
+|---|---|---|
+| `test/gui/BpFormTest.csproj` + `BpFormTest.cs` | `BpForm` 出图对话框**无头单测**（24 项：控件/行列/勾选/比例联动/写回/取消/列不可排序） | `dotnet run --project test\gui\BpFormTest.csproj -c Release`，退出码 0 = 全过，日志在 `%TEMP%\bpform_test.log` |
+| `test/gui/MkBlockDwg.csproj` + `MkBlockDwg.cs` | 生成"图块式图框"图纸 `blk.dwg`（块 `TITLEBLOCK_A3` + 属性 `TUHAO/TUMING/BILI/BANCI/RIQI` + 框内几何） | accoreconsole 里 `netload` 后跑 `MKBLK`；输出到 `%BPBLK_OUT%`（默认 `%TEMP%`） |
+| `test/fixtures/content.dwg` | 3 个**有内容**的空白框（118900×84570 / 84100×59400 / 59400×84100）——出图链路回归用 | 直接 `/i` 打开 |
+| `test/fixtures/blk.dwg` | 上面 `MKBLK` 的产物，2 个图块式图框 | 同上 |
+
+**为什么 `BpForm` 可以无头测**：它只吃 `List<FrameInfo>` + `List<Media>` + 几个标量，不碰 `Application`。`form.Show(); Application.DoEvents();` 之后 `PerformClick()` 即走完整交互路径。**必须 `Show()`**，否则 `PerformClick()` 静默无效（坑 #32）。
+
+**为什么需要 `blk.dwg`**：`test/test_dwg.dwg` 只有 3 个**空**多段线框，`CountVisibleInWindow` 会把它们全判 `SKIP`，覆盖不到"图块+属性标签"链路（`BPTEACH`/`BPREV`/`BPSPLIT`）。块名与标签刻意不用中文，以证明识别结果来自 `config.json` 学习记录而非内置中文规则。
+
+**accoreconsole 交互能力边界**（详见坑 #33）：
+
+| API | 可脚本化 | 喂法 |
+|---|---|---|
+| `GetSelection()` | ✅ | 裸 `ALL` + 空行 |
+| `GetString()` / `GetInteger()` | ✅ | 下一行直接写值 |
+| `GetEntity()` | ❌ | 5 种写法全失败（坐标串/端点/线上点/隐式选择集/补空行） |
+| `ShowModalDialog()` | ❌ | 占住主线程，后续 COM 全 `RPC_E_CALL_REJECTED`；窗口枚举也找不到独立顶层窗口 |
+
+**跨机器注意**：这些工程用 `$(AcadDir)`（可由 `ACAD_DIR` 环境变量覆盖）定位 AutoCAD 程序集，用 `$(RepoRoot)` 定位 `BPPlot.dll`，**没有硬编码本机路径**。`BpFormTest` 引用的是 `build/bin/Release/net8.0-windows/BPPlot.dll`，跑测试前先 `build_net8.cmd`。
+
 ---
 
 ## 6. 已知坑（AutoCAD 2023 实测结论，勿重复试错）
@@ -385,10 +429,15 @@ for f in sorted(glob.glob('test/out_*/Sheet*.pdf')):
 10. 菜单**跨会话持久但插件不自动加载** → 每个菜单项宏自带"静默 NETLOAD 当前 DLL（正斜杠路径 + 临时 `FILEDIA=0`）"前缀。`NETLOAD` 对已加载程序集是幂等空操作。
 11. 菜单栏默认随功能区隐藏，用户看不到时提示 `MENUBAR` 输入 `1`。
 12. **DLL 与源码必须同批提交的证据**：v0.7 的 `f25f39f` 就同时改了 `src/BPPlot.cs`(+136) 和 `BPPlot.dll`(51712→57344)，`bb1798a` 同理。历史一直如此，别破例。
+    **唯一例外（`research/autocad-2025-compat` 分支）**：本机只装了 AutoCAD 2025，**没有 2023**，`build.cmd` 引用的 `D:\Program Files\AutoCAD 2023\...` 不存在，根目录 `BPPlot.dll`（Framework 4.x 产物）**无法重编**。因此本分支上的源码改动**只有 net8 产物同步**（`build_net8.cmd` → `build/bin/Release/net8.0-windows/`，该目录不入库、可随时重建）。
+    - 合并回 `main` 前必须在有 2023 的机器上跑一次 `build.cmd` 重编根 DLL 并同批提交，否则根 DLL 与源码脱节。
+    - 这不是"省一步"，是**已知的临时欠账**，`main` 上不能沿用。
 13. **`build.cmd` 的引用列表会随功能增长**：v0.7 加菜单时才补上 `AcCui.dll` + `Autodesk.AutoCAD.Interop.dll` + `...Interop.Common.dll` 并加入 `src/BpMenu.cs`。新增依赖 AutoCAD 程序集的功能时，**改源码的同时改 `build.cmd`，否则报 CS0246 找不到类型**。
 14. `.cs` 源码是 **UTF-8 无 BOM + CRLF**，编译必须带 `/codepage:65001`；去掉该参数会让中文注释/字符串按 GBK 解析而编译报错。
 15. `PackageContents.xml` 在仓库与 zip 内是**同一份字节**（已核对一致）；改它要重新打包 zip，否则 bundle 里的还是旧配置。
-16. **【高危】`BpForm` 的 DataGridView 允许用户点表头排序，排完会导出错图**。`DataGridViewTextBoxColumn.SortMode` 默认是 `Automatic`（已用 csc 实测确认），代码里从未设置 `SortMode`。而 `ApplyAndClose()` 用 `_frames[r.Index]` 取值——`r.Index` 是**显示行号**，一旦用户点了"图号"或"比例"表头排序，显示行与 `_frames` 下标就错位，**勾选 A 图框却按 B 图框的比例/文件名出图**。这是静默错图，不是崩溃。修复方向：每个文本列设 `SortMode = DataGridViewColumnSortMode.NotSortable`，或改用数据绑定 + `DataBoundItem`。
+16. **【已修复 v0.8】`BpForm` 的 DataGridView 曾允许点表头排序，排完导出错图**。`DataGridViewTextBoxColumn.SortMode` 默认是 `Automatic`（已用 csc 实测确认），原代码从未设置 `SortMode`。而 `ApplyAndClose()` 用 `_frames[r.Index]` 取值——`r.Index` 是**显示行号**，一旦用户点了"图号"或"比例"表头排序，显示行与 `_frames` 下标就错位，**勾选 A 图框却按 B 图框的比例/文件名出图**（静默错图，不崩溃）。
+    修复：`_grid.Columns.AddRange(...)` 之后逐列 `col.SortMode = DataGridViewColumnSortMode.NotSortable`。**新增任何列都必须同样处理，否则重新引入本缺陷**。
+    实证（`gui/formtest/`，无头实例化）：修复前"排序后首行显示 A-102，写回却落到 A-101"；修复后 0 列可排、显示与写回一致。
 17. **`BpForm` 里"无内容/无纸张"的降级文案**：`PaperPreview` 返回 `"-"`，`UpdatePaper` 失败时 `catch {}` 静默——用户在比例栏输入非法值（如 `0`、`abc`）后，纸张列显示上一次的值或空白，没有任何提示。改对话框时补可见提示。
 18. **`DropContained` 的包含判定是包含式（`>=`/`<=` + eps）**：**两个完全重合的图框会互相判为"被包含"，只保留一个**。这是刻意的去重行为（与 MSteel 一致），但用户"画了两个完全相同的框想各打一份"时会被静默合并。若需求变化，改判定为严格包含。
 19. **`PlotFrames2` 开头会再跑一次 `DropContained`，推翻用户在对话框里的预期**：
@@ -402,7 +451,8 @@ for f in sorted(glob.glob('test/out_*/Sheet*.pdf')):
 23. **`LangVersion` 在 net8 工程里不要锁 C# 5**：C# 5 上限只是 `csc v4.0.30319` 的限制。net8 用 Roslyn，可自由使用现代语法——但**若要源码双轨共用，仍须保持 C# 5 可编译**，这是硬约束。
 24. **【PdfSharp 1.50 读不了 AutoCAD 2025 的 PDF】**：`PdfReaderException: Invalid entry in XRef table, ID=13, Generation=0, Position=...`。AutoCAD 2025 打印引擎生成的 xref 偏移量 1.50 解析不了（PDF 1.7、传统 xref 表、19KB 量级的小文件也会失败）。**net8 产物必须用 PdfSharp 6.x**；6.x 实测能正确读取（`pages=1, 2835×4008pt`）并完成裁切/合并。
 25. **【PdfSharp 6.x 有 8 个传递依赖】**：`Microsoft.Extensions.{Logging,Logging.Abstractions,DependencyInjection,DependencyInjection.Abstractions,Options,Primitives}`、`System.Diagnostics.DiagnosticSource`、`System.Runtime.CompilerServices.Unsafe`。缺任一个 → `PdfDocument..ctor()` 抛 `FileNotFoundException`。SDK 风格库工程**默认不复制** PackageReference 的 DLL，必须设 `<CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>`。部署时 13 个 DLL 必须同目录。
-26. **【确认缺陷】`BPL` 布局批量出图不可用**：报 `eLayoutNotCurrent` 后进程崩溃。根因是 `BpLayouts()` 遍历布局字典时**从不切换 `LayoutManager.Current.CurrentLayout`**，在模型空间上下文里对图纸空间布局 `BeginDocument`。这是既有代码缺陷（与 net8/2025 无关），2023 同样会失败，只因 `test/` 无布局用例从未暴露。修复需在循环内切布局并在 `finally` 恢复。
+26. **【已修复 v0.8】`BPL` 布局批量出图**（原报 `eLayoutNotCurrent` 后进程崩溃）。两个独立缺陷叠加：遍历布局字典时**从不切换** `LayoutManager.Current.CurrentLayout`（→ `eLayoutNotCurrent`，API 要求目标布局必须是当前布局）；`finally` 里无条件 `EndPlot()`（→ 零 `BeginDocument` 时 AccessViolation 杀进程）。
+    修复：先收集布局名（不在遍历字典时改布局上下文）→ 循环内 `CurrentLayout = layName` → `plotStarted` 守卫 → `finally` 恢复 `prevLayout`。验证：2 布局 → 2 个 PDF，`BPL_SUMMARY OK=2 FAIL=0`，`/MediaBox` 均 297×420mm。
 27. **`USERS2` 预设会误触发"加载即出图"**：若 `.scr` 先 `(setvar "users2" "<dir>")` 再 `netload`，`App.Initialize` 会判定为 accoreconsole 场景并直接跑 `BPLOTAUTO`（可能崩溃）。**正确顺序：先 netload（USERS2 为空）→ 再设 USERS2 → 再执行目标命令**：
     ```lisp
     (setvar "users2" "")
@@ -411,6 +461,18 @@ for f in sorted(glob.glob('test/out_*/Sheet*.pdf')):
     BPSPLIT
     ```
 28. **`BP1` 不是"只打一个图框"**：它只是"不弹对话框、用 USERS1/USERS2 默认参数"，`CollectFrames` 仍会收集选择集里的**全部**图框。想只打一个就在选择时只选一个。
+
+29. **【高危，已修复 v0.8】零文档 `EndPlot` → AccessViolation 0xC0000005，进程直接消失**。`PlotEngine.EndPlot()` 在没有成功 `BeginDocument` 过的状态下调用会触发访问违例，**不是可捕获异常**，`try/catch` 完全拦不住，AutoCAD 无任何提示直接退出。典型触发：所有图框都被空窗检测判为 `SKIP`（`pages.Count == 0`）、或所有布局 `BuildPage` 全失败。
+    修复：`PlotFrames2` / `BpLayouts` 各加 `bool plotStarted = false;`，每次 `BeginDocument` 成功后置 `true`，`finally` 里 `if (pe != null && plotStarted) EndPlot()`。**新增任何出图入口都必须照抄这个守卫**。
+30. **【已修复 v0.8】出图引擎不释放 → 同一 AutoCAD 会话第二次出图静默失败**。`EndPlot()` 只结束这一轮出图事务，**不回收 COM 端 `PlotEngine` 实例**。同一会话内第二次出图抛 `BPLOT 致命错误: ePlotAlreadyStarted`，且统计是 `OK=0 FAIL=0`——用户只看到"第二次没出图"，没有失败计数。`PlotEngine` 同时实现 `IDisposable` 和显式 `Destroy()`，**两个都要调**。
+    修复：`ReleaseEngine(pe)` 辅助方法（`Destroy()` + `Dispose()`，各自 try/catch），在 `PlotFrames2` / `BpLayouts` / `BPPREVIEW` 的所有退出路径调用。
+    验证：同一会话连跑 3 次 `BPLOTAUTO` 三次全绿；`BP1 → BP1 → BPLOTMERGE` 连跑同样三次全绿。
+31. **`List.Sort` 是不稳定排序 → Sheet 编号跨次抖动**。A1 横版与 A1 竖版图框面积完全相同（4.99M 图形单位²），按面积单键排序时两次运行顺序互换，`Sheet001/Sheet002` 对应的图框漂移，黄金样张无法复现。
+    修复：`DropContained` 用多级排序键 —— 面积降序 → `MinX` → `MinY` → 宽度。**任何"按面积/尺寸排序"的新逻辑都必须补二级键**。
+32. **`DataGridView` 的 `PerformClick()` 只有控件可见才生效**。无头单测 `BpForm` 时若只 `new BpForm(...)` 不 `Show()`，`Button.PerformClick()` 静默无效（`CanSelect == false`），`DialogResult` 停在 `None`——看起来像"按钮没绑事件"，实际是测试方法问题。
+    正确写法：`form.Show(); Application.DoEvents();` 之后再 `PerformClick()`。
+33. **accoreconsole 下 `GetEntity` 无法用 `.scr` 喂点**。实测 5 种写法全部失败：`2000,28000`（坐标串）、`21000,0`（端点）、`7000,7000`（线上点）、`(sssetfirst nil (ssget ...))` 隐式选择集、单点命令后补空行。坐标串会被当作文本吃掉并返回"未选中对象"。
+    例外：`GetSelection` **可以**用裸 `ALL` + 空行喂进去——`BP1`/`BPLOTMERGE`/`BPREV`/`BPSPLIT` 都是这么测通的。所以**选面（GetSelection）能脚本化，选点/选单体（GetEntity）不能**。验证 `BPTEACH` 这类 `GetEntity` 命令时，改用"手工写入同格式配置 → 验证下游链路消费"的替代覆盖。
 
 ---
 

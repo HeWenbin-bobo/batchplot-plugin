@@ -79,6 +79,12 @@ namespace BpPlot
             var cName = new DataGridViewTextBoxColumn { HeaderText = "输出文件名(可改)", Name = "fname", FillWeight = 26 };
             var cPaper = new DataGridViewTextBoxColumn { HeaderText = "纸张预览", Name = "paper", ReadOnly = true, FillWeight = 22 };
             _grid.Columns.AddRange(new DataGridViewColumn[] { cSel, cNum, cTitle, cScale, cName, cPaper });
+            // 关键：全部列禁止排序。
+            // 行↔_frames 是位置绑定（ApplyAndClose 用 r.Index 取图框），一旦点标题排序，
+            // 行序与 _frames 索引脱钩，用户在第 1 行改的文件名/比例会静默落到别的图框上（错图无提示）。
+            // DataGridViewTextBoxColumn.SortMode 默认 = Automatic，必须逐列显式关掉。
+            foreach (DataGridViewColumn col in _grid.Columns)
+                col.SortMode = DataGridViewColumnSortMode.NotSortable;
             _grid.CellValueChanged += delegate(object s, DataGridViewCellEventArgs e)
             {
                 if (e.ColumnIndex == _grid.Columns["scale"].Index && e.RowIndex >= 0)

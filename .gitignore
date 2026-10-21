@@ -40,3 +40,13 @@ research/runtime-test/diag_result.txt
 # net8 构建输出（build/BPPlotNet8.csproj 入库，bin/obj 不入库）
 build/bin/
 build/obj/
+
+# test/gui 构建输出（源码入库，bin/obj 不入库）
+test/gui/bin/
+test/gui/obj/
+
+# 黄金回归脚本的临时工作区（每次运行重建，不入库）
+test/_golden/
+
+# 全功能回归脚本的临时工作区（每次运行重建，不入库）
+test/_all/
