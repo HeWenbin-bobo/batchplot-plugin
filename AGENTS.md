@@ -496,17 +496,42 @@ AutoCAD 插件最难验证的两块——**WinForms 对话框**和**需要交互
 
 ### 7.2 打包
 
+**双产物打包（v0.7 起）**
+
 ```cmd
-cmd /c build.cmd                :: 先出根目录 BPPlot.dll
-cd deploy && make_bundle.cmd    :: 组装 BPPlot.bundle + bin/ + 安装器 → BPPlot-v0.7.zip
+cmd /c build.cmd                :: netfx: 根 BPPlot.dll（需机器上装有 AutoCAD 2021-2024）
+cmd /c build_net8.cmd           :: net8 : build/bin/Release/net8.0-windows/（需 2025）
+cd deploy && make_bundle.cmd    :: 组装双产物 zip
 ```
 
-- `make_bundle.cmd` **是 GBK 编码**（含中文文件名 `安装到本机.cmd` / `卸载本机.cmd` / `使用说明.txt`），改它必须用 GBK 保存，否则 `copy` 找不到中文文件。
-- `deploy/使用说明.txt` 同样是 GBK + CRLF。
-- `.cs` / `.md` 为 UTF-8 **无 BOM**；`.ps1` 混合（`deploy/install.ps1`、`deploy/uninstall.ps1`、`test/menu_test.ps1`、`test/menu_macro_test.ps1` 带 BOM，其余不带）。保存时保持原状，别让编辑器统一加/去 BOM。
+产物布局（zip 内）：
+
+```
+BPPlot.bundle/PackageContents.xml
+BPPlot.bundle/Contents/netfx/*.dll      A2021-2024  2 个 DLL
+BPPlot.bundle/Contents/net8/*.dll       A2025+     13 个 DLL
+bin/netfx/*.dll  bin/net8/*.dll         安装器取用
+install.ps1  uninstall.ps1  <安装.cmd>  <卸载.cmd>  <说明.txt>
+```
+
+**为什么必须双产物**：AutoCAD 2025 起 ObjectARX 托管程序集改成 .NET 8。Framework 产物在 2025 上虽然能被 `NETLOAD` 接受（实测命令能注册、图能出），但 PdfSharp 1.x 读不了 2025 打印引擎的 PDF，**裁切/合并静默失效**——页尺寸停在整张纸，而 CSV 和日志全是 `OK`。详见坑 #20/#24。
+
+**`make_bundle.cmd` 的过期 netfx 守卫（重要）**：
+脚本会用 `deploy/marker_check.ps1` 探测 netfx DLL 里有没有 `ReleaseEngine` 这个符号（当前源码才有）。没有就判定 netfx 过期，**丢弃 netfx 并改出 `BPPlot-v0.7-a2025.zip`**（2025-only 包，同时换用 `PackageContents-2025.xml` 清单）。
+理由：在没有 2021-2024 的机器上，netfx 产物编不出来，若照常打包就会把带旧 bug 的 DLL（BPL 崩溃 / 引擎泄漏 / 错图）发给 2021-2024 用户。
+`set BPPLOT_ALLOW_STALE_NETFX=1` 可强行打包混合版本，仅在复现历史 bug 时才用。
+
+**清单选择与产物一致**：`PackageContents.xml` 声明 netfx+net8 两份；`PackageContents-2025.xml` 只声明 net8。**声明了 netfx 却不存在对应目录**会让 2021-2024 尝试加载缺失模块，所以两者必须成对切换。
+
+**编码纪律**：
+- `make_bundle.cmd` 是 **ASCII-only**（中文名包装文件用 `for %%f in (*.cmd)` 通配复制，不写死中文名），改它别引入非 ASCII 字符。
+- `deploy/使用说明.txt`、`安装到本机.cmd`、`卸载本机.cmd` 是 **GBK + CRLF**，改这些必须按 GBK 保存，否则中文全乱。
+- `deploy/*.ps1` 是 **UTF-8 with BOM + CRLF**（BOM 不能去，Windows PowerShell 5.1 靠它正确识别中文）。
+- `deploy/PackageContents*.xml` 是 UTF-8 无 BOM + CRLF。
+- `.cs` / `.md` 为 UTF-8 **无 BOM**。保存时保持原状，别让编辑器统一加/去 BOM。
 - `.gitattributes` 已声明 `* text=auto`、`*.cmd text eol=crlf`、`*.scr text`、`*.dll binary`、`*.dwg binary`、`*.pdf binary` 等，别随意改。
   - **已知问题**：`*.scr text` 缺 `eol=crlf`，配合本机 `core.autocrlf=true` 会导致 git 里存 LF、检出的磁盘是 CRLF。建议改为 `*.scr text eol=crlf`（见 §5.1）。
-- zip 内的 `BPPlot.dll` 必须与仓库根目录 `BPPlot.dll` **完全一致**（同一份构建产物），不得分别编译。
+- zip 内的 netfx `BPPlot.dll` 必须与仓库根目录 `BPPlot.dll` **完全一致**，net8 目录必须与 `build/bin/Release/net8.0-windows/` 一致，不得分别编译。
 
 ### 7.3 产物入库策略（本仓库特意入库，别"顺手清理"）
 
@@ -515,7 +540,8 @@ cd deploy && make_bundle.cmd    :: 组装 BPPlot.bundle + bin/ + 安装器 → B
 - DLL 入库是刻意的：用户 `NETLOAD` 即用、无需自备编译环境（README 已声明）。
 - 因此**改源码必须重编译并同批提交 DLL**，否则仓库里的 DLL 与源码脱节。
 - 根目录 `PdfSharp.dll` 与 `libs/PdfSharp.dll` 当前内容一致（**1.50.5147.0**，同一版本）；升级 PdfSharp 必须两处同步 + 重新打包 zip。DESIGN.md M8 计划的 net8 产物需改用 PdfSharp 6.x（源码共用、双轨引用）。
-- `deploy/BPPlot-v0.7.zip` 入库意味着**每次发版都要重新生成它**，否则用户下载到旧包。zip 内 `bin/BPPlot.dll` 需与仓库根 DLL 字节一致。
+- `deploy/BPPlot-v0.7.zip` 入库意味着**每次发版都要重新生成它**，否则用户下载到旧包。
+- **v0.7 起发布包可能是 `BPPlot-v0.7-a2025.zip`**（2025-only）。这是 `make_bundle.cmd` 的过期 netfx 守卫在起作用：本机没有 2021-2024，netfx 编不出来。在有 2021-2024 的机器上重编后重跑 `make_bundle.cmd`，会重新产出双产物 `BPPlot-v0.7.zip`。**两个 zip 不要同时存在**，旧的删掉，避免用户下错。
 - `libs/pc3_dwg2pdf_body.bin` 是 M3 的 pc3 种子数据（**当前代码未引用**，纯预留），勿删勿改。
 
 ### 7.3.1 DLL 入库的代价与纪律

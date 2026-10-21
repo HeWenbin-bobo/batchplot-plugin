@@ -47,7 +47,8 @@ PDF 合并用 PdfSharp（MIT 协议，libs/ 内）。
 ## 快速开始（30 秒版）
 
 ```text
-1. 下载 Releases 里的 BPPlot-v0.7.zip 并解压
+1. 下载 Releases 里的 `BPPlot-v0.7.zip`（双产物，2021–2025 通用）或
+   `BPPlot-v0.7-a2025.zip`（仅 2025）并解压
 2. 双击「安装到本机.cmd」（免管理员；自动复制程序并写入当前用户的按需加载注册表）
 3. 完全退出并重启 AutoCAD —— 菜单栏出现「BP-批量打印」，命令 BPLOT / BPLOTAUTO 等
    输入即用（无需 NETLOAD）
@@ -296,4 +297,13 @@ _.quit _y                                    ; accoreconsole: _y=放弃修改；
 
 ## 兼容性
 
-AutoCAD 2021–2024（.NET Framework）。2025+ 需换 Roslyn/net8.0 编译，代码逻辑不变。
+双产物发布，安装器按本机 AutoCAD 版本自动选择：
+
+| AutoCAD | 产物 | 依赖 | 状态 |
+|---|---|---|---|
+| 2021–2024 | .NET Framework 4.x | `BPPlot.dll` + `PdfSharp.dll`（2 个） | 历史路径，代码同源 |
+| 2025 | .NET 8.0 | 13 个 DLL（PdfSharp 6.1.1 + Microsoft.Extensions.*） | 已在 AutoCAD 2025 实测 |
+
+两个产物**不能互换**：Framework 版在 2025 上虽然能被 `NETLOAD` 接受、也能出图，但 PdfSharp 1.x 读不了 2025 打印引擎产出的 PDF，**裁切与合并会静默失效**——PDF 照样生成、日志照样 `OK`，但每页都是整张纸（含大片空白），`BPSPLIT`/多框合并也是错的。看到"图出了但纸不对"就是装错了产物。
+
+AutoCAD 2026 尚未实测，清单里 `SeriesMax` 停在 `R25.0`，不会自动加载。

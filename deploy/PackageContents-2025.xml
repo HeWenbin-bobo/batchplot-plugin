@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  BPPlot 清单 —— AutoCAD 2025+ 单产物版。
+
+  AutoCAD 2025 起 ObjectARX 托管程序集改成 .NET 8，与 2021-2024 的
+  .NET Framework 4.x 产物不兼容：Framework 版在 2025 上虽然能被 NETLOAD 接受，
+  但 PdfSharp 1.x 读不了 2025 打印引擎产出的 PDF，裁切/合并会静默失效
+  （页尺寸停在整张纸，CSV 和日志还全是 OK）。所以两套二进制必须分开。
+
+  这个文件只声明 net8 那一份，用于「手头没有 2021-2024 编译环境、只能出 2025 包」
+  的场景（make_bundle.cmd 检测到 netfx 产物过期时会自动改用本文件）。
+  双产物完整版见同目录 PackageContents.xml。
+
+  SeriesMax 停在 R25.0：AutoCAD 2026（R25.1）尚未实测，宁可让它不加载，
+  也不要让它加载一个没验证过的二进制。
+-->
+<ApplicationPackage SchemaVersion="1.0"
+                    AppVersion="0.7"
+                    Name="BPPlot 批量打印"
+                    Author="hwdemtv"
+                    Description="AutoCAD 批量打印插件：图框自动识别、精确比例批量出图、合并书签、无头批打">
+  <CompanyDetails Name="hwdemtv" Url="https://github.com/hwdemtv/batchplot-plugin" Email="hwdemtv@qq.com"/>
+
+  <!-- AutoCAD 2025：.NET 8 产物（13 个 DLL 必须同目录） -->
+  <Components Description="BPPlot for AutoCAD 2025 (.NET 8)">
+    <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R25.0" SeriesMax="R25.0"/>
+    <ComponentEntry AppName="BPPlot" Version="0.7" ModuleName="./Contents/net8/BPPlot.dll" AppType="NET">
+      <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R25.0" SeriesMax="R25.0"/>
+    </ComponentEntry>
+  </Components>
+</ApplicationPackage>
