@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- BpForm 出图对话框的无头单测。
+       原理：BpForm 是独立 WinForms 窗体，脱离 AutoCAD 即可实例化；
+       form.Show() 后 PerformClick() 就能覆盖按钮/表格/写回逻辑。
+       前置：先在仓库根跑 build_net8.cmd 产出 build/bin/Release/net8.0-windows/BPPlot.dll
+       用法：dotnet run (project test/gui/BpFormTest.csproj)
+             日志写到 %TEMP%\bpform_test.log，全部通过时进程退出码 0。 -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>FormTest</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <RepoRoot Condition="'$(RepoRoot)' == ''">$(MSBuildThisFileDirectory)..\..\</RepoRoot>
+    <AcadDir Condition="'$(ACAD_DIR)' != ''">$(ACAD_DIR)</AcadDir>
+    <AcadDir Condition="'$(AcadDir)' == ''">D:\Program Files\Autodesk\AutoCAD 2025</AcadDir>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="BpFormTest.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="BPPlot">
+      <HintPath>$(RepoRoot)build\bin\Release\net8.0-windows\BPPlot.dll</HintPath>
+    </Reference>
+    <Reference Include="acmgd"><HintPath>$(AcadDir)\acmgd.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="acdbmgd"><HintPath>$(AcadDir)\acdbmgd.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="accoremgd"><HintPath>$(AcadDir)\accoremgd.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+</Project>

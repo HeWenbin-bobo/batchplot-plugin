@@ -77,9 +77,24 @@ cmd /c build_diag.cmd     :: 产出 BPDiag.dll（诊断工具，独立编译）
 
 **实测环境差异（务必先读）**：
 
-- 本机（开发机）装的是 **AutoCAD 2025**（`D:\Program Files\Autodesk\AutoCAD 2025`），而 `build.cmd` / 各 `.cmd` / `.ps1` 里写的是 `D:\Program Files\AutoCAD 2023\AutoCAD 2023`——**不改路径直接跑会 CS0006 全量失败**。
-- 用 .NET Framework 的 `csc.exe` 引用 **2025** 的 `acmgd.dll / acdbmgd.dll / accoremgd.dll` 会报 `CS0012`（缺 `System.Runtime` 8.0）与 `CS0616`（`CommandMethodAttribute` 非特性类）——2025 的 managed 程序集是 net8 目标，.NET Framework csc 无法引用。这不是代码问题，是产物目标问题，对应 `docs/DESIGN.md` 的 **M8 net8 双产物**。
-- 因此：**在 2023/2024 机器上验证主产物，在 2025+ 机器上验证 net8 产物**。若本机只有 2025，只能做「源码语法/逻辑审阅 + 有 2023 环境时再实编译」的验证，交付时必须如实说明这一点，不得声称"已编译通过"。
+- 本机（开发机）装的是 **AutoCAD 2025**（`D:\Program Files\Autodesk\AutoCAD 2025`，R25.0.58.0），而 `build.cmd` / 各 `.cmd` / `.ps1` 里写的是 `D:\Program Files\AutoCAD 2023\AutoCAD 2023`——**不改路径直接跑会 CS0006 全量失败**。
+- 2021–2024 与 2025 是**硬分界**：前者的 managed 程序集是 `.NETFramework 4.x`，2025 起是 **`.NETCoreApp v8.0`**（已用 `TargetFrameworkAttribute` 实测确认）。.NET Framework 的 `csc.exe` 无法引用 2025 程序集（报 `CS0012` 缺 `System.Runtime` 8.0 / `CS0616` `CommandMethodAttribute` 非特性类）。这不是代码问题，是产物目标问题。
+- **两条已实测可行的产物路线**（详见 `research/报告.md`）：
+
+  | 产物 | 工具链 | 引用 | 覆盖 |
+  |---|---|---|---|
+  | `BPPlot.dll` | `csc.exe`（.NET Framework 4.0） | 2021–2024 安装目录程序集 | 2013–2024 |
+  | `BPPlot.dll`（net8 同名产物） | `dotnet build`（`net8.0-windows`） | **2025 安装目录程序集，无需 ObjectARX SDK** | 2025+ |
+
+- **net8 构建入口**：`build_net8.cmd` → `build/BPPlotNet8.csproj`（已随仓库提供，`ACAD_DIR` 环境变量可覆盖版本）。
+- **net8 产物无需改源码**：`BPPlot.cs` + `BpForm.cs` + `BpMenu.cs` 三个文件零修改即可编译。
+- **net8 必须的三项适配**（缺一分钟都不行，详见 `research/功能验证报告.md`）：
+  1. `App.Initialize()` 加 `Encoding.RegisterProvider(CodePagesEncodingProvider.Instance)`（`#if NET8_0_OR_GREATER` 包裹）——否则 `Save()` 抛 `NotSupportedException`（缺 encoding 1252）。
+  2. **PdfSharp 必须用 6.x**（`PackageReference`）——1.50 **无法解析 AutoCAD 2025 打印引擎产出的 PDF**，抛 `PdfReaderException: Invalid entry in XRef table`，裁切/合并全废。
+  3. csproj 设 **`<CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>`**——PdfSharp 6 依赖 8 个 `Microsoft.Extensions.*` 包，缺一个就在 `PdfDocument..ctor()` 抛 `FileNotFoundException`。
+- **这三项失败的共同表现是"静默"**：`CropPdf` 用 `catch { return false; }`，`MergePdfs` 失败只在日志提一句。**验证裁切是否真的生效，必须读 PDF 的 `/MediaBox`**（见 §5.5），不能信 CSV 的 `OK` 或日志的 `[crop]`。
+- **`.NET Framework` 产物这三点都不需要**（自带全部代码页、PdfSharp 1.50 够用、csc 无 NuGet 概念）。
+- **交付纪律**：能在本机实测的就说"已实测"；只能审阅的必须写"未编译验证"。**不得把"设计上应该可行"说成"已验证"**。
 
 `build.cmd` 必需引用：`acmgd.dll`、`acdbmgd.dll`、`accoremgd.dll`、`AcCui.dll`、`Autodesk.AutoCAD.Interop.dll`、`Autodesk.AutoCAD.Interop.Common.dll`、`libs/PdfSharp.dll`、`System.Windows.Forms.dll`、`System.Drawing.dll`。
 
@@ -259,6 +274,24 @@ runrealfix.cmd        :: real_fix.scr  → out_fix_real/（需 real.dwg）
 - 控制台里 `(command "_.netload")` 能加载程序集、能跑 `Initialize`，**但 `CommandMethod` 命令不注册**——所以无头自动化只能走「USERS2 触发 + 加载即出图」，不能指望在 `.scr` 里敲 `BPLOT`。
 - **`.scr` 的行尾必须有 CRLF**。当前 12 个 `.scr` 在 git 里存的是 LF，只有 `bundle_selftest.scr` 是 CRLF——因为 `.gitattributes` 里 `*.scr text` **没写 `eol`**，而本机 `core.autocrlf=true`：检出的磁盘文件是 CRLF（能跑），但 commit 进去的 blob 是 LF。**在别的机器/CI 上检出可能就是 LF → `.scr` 命令被 AutoCAD 当成一整行**。改 `.gitattributes` 为 `*.scr text eol=crlf` 可从根上修；在那之前，**提交前后都用 `git diff --stat -- *.scr` 确认没有意外的整文件行尾变更**（当前 `test/bundle_selftest.scr` 就有一处这种待提交差异）。
 - 相关坑：`git diff` 对 `.scr` 会显示"整个文件都改了"但其实只有行尾不同。用 `git diff --ignore-cr-at-eol` 或 `git cat-file -p HEAD:<file> | od -c` 确认真实差异。
+- **【2026-10 新增，已验证】accoreconsole 2025 必须经 `cmd.exe` 包装调用**。在 Git Bash 里直接跑 `accoreconsole.exe ... > log 2>&1` 会**永久挂起**：进程存活、日志停在 `命令:` 提示符、`.scr` 完全不执行、`_.quit _y` 无效、只能 `timeout` 强杀。根因是 Git Bash 的 POSIX 重定向与 accoreconsole 的 `Redirect stdout` 机制冲突。正确写法：
+
+  ```cmd
+  :: run.cmd
+  @echo off
+  set ACC=D:\Program Files\Autodesk\AutoCAD 2025\accoreconsole.exe
+  "%ACC%" /i "输入.dwg" /s "脚本.scr" > "日志.log" 2>&1
+  echo EXIT=%errorlevel%
+  ```
+  然后 `cmd //c run.cmd`（Git Bash 里）或直接双击。**2023 上未验证是否存在同样问题**——但那台机器的既有脚本都是 `.cmd` 包装，天然规避。
+- **诊断"脚本到底跑没跑"的可靠办法**：在 `.scr` 里写标记文件，别信日志
+  ```lisp
+  (setq f (open "D:/path/marker.txt" "w"))
+  (write-line "SCRIPT_RAN" f)
+  (close f)
+  ```
+  标记文件出现 = 脚本执行；否则是启动/重定向阶段就卡了。
+- **`/loadmodule <dll>` 不会注册 `CommandMethod`**（`Initialize` 会执行，但命令报"未知命令"）。必须用 `.scr` 里的 `(command "_.netload" "...")`。2025 已实测确认，与 2023 行为一致。
 
 ### 5.2 GUI 自动化（`.ps1`，走 COM）
 
@@ -288,7 +321,25 @@ runrealfix.cmd        :: real_fix.scr  → out_fix_real/（需 real.dwg）
 | `out_s1000/Sheet001.pdf` | `scaletest1000.scr` 84100×59400，**1:1000** | **84.1 × 59.4** | `ISO_full_bleed_A5_(148×210)` | 是 |
 | `out_merge/test_dwg_合并.pdf` | `fixtest_merge.scr` + `BPPLOT_MERGE=1` | 3 页，页序 = 1189×845.7 / 594.1×841 / 841×594 | — | 书签 = `Sheet001/002/003` |
 
-**提取方法（无需 pymupdf，正则读 `/MediaBox` 即可）**：
+**一键回归**（推荐）：
+
+```cmd
+build_net8.cmd
+test\run_all_net8.cmd        :: 全量：自检 + 出图 + 连跑 + 合并 + 拆分 + 改版次（14 项）
+test\run_golden_net8.cmd     :: 只验页尺寸黄金基线（3 框 1:100）
+```
+
+`run_all_net8.cmd` 会临时写入 `%APPDATA%\BPPlot\config.json`（模拟 `BPTEACH` 的学习结果），**跑完自动还原**：原文件存在则备份后恢复，不存在则删除。别去掉这段——否则会吃掉用户真实的标签配置。
+
+判定核心是 `test/golden_check.py`（正则读 `/MediaBox` 换算 mm，容差 0.6mm），可单独复用：
+
+```cmd
+python test\golden_check.py <pdf目录> 1189.0x845.7 594.1x841.0 841.0x594.0
+```
+
+脚本自带以下纪律（改动前先读）：产物从 `build/bin/Release/net8.0-windows` 取（不是根目录 DLL，也不是旧的手工目录）；`.scr` 里 `USERS2` 必须先设空、`netload` 之后再设真值、最后显式 `BPLOTAUTO`（避开坑 #27 的"加载即出图"分支）；两个脚本的工作区分别是 `test/_golden/` 与 `test/_all/`（均 gitignore）。
+
+**手工提取方法（无需 pymupdf，正则读 `/MediaBox` 即可）**：
 
 ```python
 import re, glob
@@ -299,6 +350,16 @@ for f in sorted(glob.glob('test/out_*/Sheet*.pdf')):
 ```
 
 **书签校验**：合并 PDF 的书签标题是 UTF-16BE 十六进制串，形如 `/Title<FEFF0053...>`。`Sheet001` → `0053 0068 0065 0065 0074 0030 0030 0031`。可解流后用正则提取，或直接 grep `/Title<FEFF` 数条数（应为页数）。
+
+**裁切是否生效的唯一可信判据 = `/MediaBox`**。以下三个信号**都不能**证明裁切成功：
+
+| 信号 | 为什么不可信 |
+|---|---|
+| CSV 里的 `OK` | 裁切在 CSV 写入之后单独执行，失败也不改状态 |
+| CSV 纸张列的 `->1189x845.7mm` | 这是**期望值**，由 `csvRowPatch` 在 `CropPdf` 返回 true 时才追加……但若裁切整体未执行（如 `crop` 判定为 false），列里就没有 `->`。有 `->` 基本可信，但仍建议核对字节 |
+| 日志的 `[crop] xxx -> 真实图幅` | 同上；失败时打的是 `[crop失败]`，中文在 UTF-16 日志里可能被吞，看起来像正常行 |
+
+**必须实测**：读 PDF 的 `/MediaBox` 换算成 mm，与 §5.5 表的期望值逐个比对。2026-10 在 AutoCAD 2025 上就是靠这个发现"PdfSharp 1.50 无法解析 2025 的 PDF"——CSV 全 `OK`、日志全 `[crop]`，但页尺寸仍是整张纸。
 
 **几何自洽校验（改比例逻辑时最有价值的检查）**：
 
@@ -326,6 +387,32 @@ for f in sorted(glob.glob('test/out_*/Sheet*.pdf')):
   - `test/loadprobe.cs` + `loadprobe.dll`：Bundle 自动加载机制的**最小探针**（v0.7 用它证明本机构建不支持 bundle 自动加载），属一次性取证资产，保留但不再运行
 - `test/real.dwg`、`test/out_real/`、真实项目日志已在 `.gitignore` 排除，**永不入库**。
 
+### 5.7 无头 GUI / 交互验证（`test/gui/` + `test/fixtures/`）
+
+AutoCAD 插件最难验证的两块——**WinForms 对话框**和**需要交互选点的命令**——已各有可复现的绕过方案，都在 `test/gui/`：
+
+| 资产 | 用途 | 用法 |
+|---|---|---|
+| `test/gui/BpFormTest.csproj` + `BpFormTest.cs` | `BpForm` 出图对话框**无头单测**（24 项：控件/行列/勾选/比例联动/写回/取消/列不可排序） | `dotnet run --project test\gui\BpFormTest.csproj -c Release`，退出码 0 = 全过，日志在 `%TEMP%\bpform_test.log` |
+| `test/gui/MkBlockDwg.csproj` + `MkBlockDwg.cs` | 生成"图块式图框"图纸 `blk.dwg`（块 `TITLEBLOCK_A3` + 属性 `TUHAO/TUMING/BILI/BANCI/RIQI` + 框内几何） | accoreconsole 里 `netload` 后跑 `MKBLK`；输出到 `%BPBLK_OUT%`（默认 `%TEMP%`） |
+| `test/fixtures/content.dwg` | 3 个**有内容**的空白框（118900×84570 / 84100×59400 / 59400×84100）——出图链路回归用 | 直接 `/i` 打开 |
+| `test/fixtures/blk.dwg` | 上面 `MKBLK` 的产物，2 个图块式图框 | 同上 |
+
+**为什么 `BpForm` 可以无头测**：它只吃 `List<FrameInfo>` + `List<Media>` + 几个标量，不碰 `Application`。`form.Show(); Application.DoEvents();` 之后 `PerformClick()` 即走完整交互路径。**必须 `Show()`**，否则 `PerformClick()` 静默无效（坑 #32）。
+
+**为什么需要 `blk.dwg`**：`test/test_dwg.dwg` 只有 3 个**空**多段线框，`CountVisibleInWindow` 会把它们全判 `SKIP`，覆盖不到"图块+属性标签"链路（`BPTEACH`/`BPREV`/`BPSPLIT`）。块名与标签刻意不用中文，以证明识别结果来自 `config.json` 学习记录而非内置中文规则。
+
+**accoreconsole 交互能力边界**（详见坑 #33）：
+
+| API | 可脚本化 | 喂法 |
+|---|---|---|
+| `GetSelection()` | ✅ | 裸 `ALL` + 空行 |
+| `GetString()` / `GetInteger()` | ✅ | 下一行直接写值 |
+| `GetEntity()` | ❌ | 5 种写法全失败（坐标串/端点/线上点/隐式选择集/补空行） |
+| `ShowModalDialog()` | ❌ | 占住主线程，后续 COM 全 `RPC_E_CALL_REJECTED`；窗口枚举也找不到独立顶层窗口 |
+
+**跨机器注意**：这些工程用 `$(AcadDir)`（可由 `ACAD_DIR` 环境变量覆盖）定位 AutoCAD 程序集，用 `$(RepoRoot)` 定位 `BPPlot.dll`，**没有硬编码本机路径**。`BpFormTest` 引用的是 `build/bin/Release/net8.0-windows/BPPlot.dll`，跑测试前先 `build_net8.cmd`。
+
 ---
 
 ## 6. 已知坑（AutoCAD 2023 实测结论，勿重复试错）
@@ -342,10 +429,15 @@ for f in sorted(glob.glob('test/out_*/Sheet*.pdf')):
 10. 菜单**跨会话持久但插件不自动加载** → 每个菜单项宏自带"静默 NETLOAD 当前 DLL（正斜杠路径 + 临时 `FILEDIA=0`）"前缀。`NETLOAD` 对已加载程序集是幂等空操作。
 11. 菜单栏默认随功能区隐藏，用户看不到时提示 `MENUBAR` 输入 `1`。
 12. **DLL 与源码必须同批提交的证据**：v0.7 的 `f25f39f` 就同时改了 `src/BPPlot.cs`(+136) 和 `BPPlot.dll`(51712→57344)，`bb1798a` 同理。历史一直如此，别破例。
+    **唯一例外（`research/autocad-2025-compat` 分支）**：本机只装了 AutoCAD 2025，**没有 2023**，`build.cmd` 引用的 `D:\Program Files\AutoCAD 2023\...` 不存在，根目录 `BPPlot.dll`（Framework 4.x 产物）**无法重编**。因此本分支上的源码改动**只有 net8 产物同步**（`build_net8.cmd` → `build/bin/Release/net8.0-windows/`，该目录不入库、可随时重建）。
+    - 合并回 `main` 前必须在有 2023 的机器上跑一次 `build.cmd` 重编根 DLL 并同批提交，否则根 DLL 与源码脱节。
+    - 这不是"省一步"，是**已知的临时欠账**，`main` 上不能沿用。
 13. **`build.cmd` 的引用列表会随功能增长**：v0.7 加菜单时才补上 `AcCui.dll` + `Autodesk.AutoCAD.Interop.dll` + `...Interop.Common.dll` 并加入 `src/BpMenu.cs`。新增依赖 AutoCAD 程序集的功能时，**改源码的同时改 `build.cmd`，否则报 CS0246 找不到类型**。
 14. `.cs` 源码是 **UTF-8 无 BOM + CRLF**，编译必须带 `/codepage:65001`；去掉该参数会让中文注释/字符串按 GBK 解析而编译报错。
 15. `PackageContents.xml` 在仓库与 zip 内是**同一份字节**（已核对一致）；改它要重新打包 zip，否则 bundle 里的还是旧配置。
-16. **【高危】`BpForm` 的 DataGridView 允许用户点表头排序，排完会导出错图**。`DataGridViewTextBoxColumn.SortMode` 默认是 `Automatic`（已用 csc 实测确认），代码里从未设置 `SortMode`。而 `ApplyAndClose()` 用 `_frames[r.Index]` 取值——`r.Index` 是**显示行号**，一旦用户点了"图号"或"比例"表头排序，显示行与 `_frames` 下标就错位，**勾选 A 图框却按 B 图框的比例/文件名出图**。这是静默错图，不是崩溃。修复方向：每个文本列设 `SortMode = DataGridViewColumnSortMode.NotSortable`，或改用数据绑定 + `DataBoundItem`。
+16. **【已修复 v0.8】`BpForm` 的 DataGridView 曾允许点表头排序，排完导出错图**。`DataGridViewTextBoxColumn.SortMode` 默认是 `Automatic`（已用 csc 实测确认），原代码从未设置 `SortMode`。而 `ApplyAndClose()` 用 `_frames[r.Index]` 取值——`r.Index` 是**显示行号**，一旦用户点了"图号"或"比例"表头排序，显示行与 `_frames` 下标就错位，**勾选 A 图框却按 B 图框的比例/文件名出图**（静默错图，不崩溃）。
+    修复：`_grid.Columns.AddRange(...)` 之后逐列 `col.SortMode = DataGridViewColumnSortMode.NotSortable`。**新增任何列都必须同样处理，否则重新引入本缺陷**。
+    实证（`gui/formtest/`，无头实例化）：修复前"排序后首行显示 A-102，写回却落到 A-101"；修复后 0 列可排、显示与写回一致。
 17. **`BpForm` 里"无内容/无纸张"的降级文案**：`PaperPreview` 返回 `"-"`，`UpdatePaper` 失败时 `catch {}` 静默——用户在比例栏输入非法值（如 `0`、`abc`）后，纸张列显示上一次的值或空白，没有任何提示。改对话框时补可见提示。
 18. **`DropContained` 的包含判定是包含式（`>=`/`<=` + eps）**：**两个完全重合的图框会互相判为"被包含"，只保留一个**。这是刻意的去重行为（与 MSteel 一致），但用户"画了两个完全相同的框想各打一份"时会被静默合并。若需求变化，改判定为严格包含。
 19. **`PlotFrames2` 开头会再跑一次 `DropContained`，推翻用户在对话框里的预期**：
@@ -353,6 +445,34 @@ for f in sorted(glob.glob('test/out_*/Sheet*.pdf')):
     - 用户勾选了"大框 A + 完全被 A 包含的小框 B"，B 会在这一步被静默剔掉（有 `WriteMessage` 提示剔除数量，但对话框里已勾选的事实让人以为会出）。
     
     这不是 bug 而是"自动去重"语义，但**改对话框（DESIGN M5 多行编辑/图号重编）时必须决定：出图顺序是听用户的还是听 `DropContained` 的**。当前是听 `DropContained`。
+20. **【PdfSharp + .NET 8 = 静默失败】**（AutoCAD 2025 路线必读）：`.NET 5+` 默认不内置 ANSI 代码页（1252/936/GBK），而 PdfSharp 1.50 内部 `Encoding.GetEncoding(1252)`。症状是 `PdfDocument` 构造成功、`AddPage` 成功，但 **`Save()` 抛 `NotSupportedException: No data is available for encoding 1252`**，只写出 39 字节废文件。因为 `CropPdf` 用 `catch { return false; }`，失败完全无声——用户只看到"PDF 没裁切"或"合并失败"。修复：`App.Initialize()` 开头 `Encoding.RegisterProvider(CodePagesEncodingProvider.Instance)`。**这是 net8 产物唯一必需的代码改动**。
+21. **2025 的 `Application` 命名空间未变**：DESIGN.md 原写"2025 起 `Application` → `Autodesk.AutoCAD.ApplicationServices.Core`"，实测**不必改**——现有 `using Autodesk.AutoCAD.ApplicationServices;` 在 2025 下直接编译通过。
+22. **net8 工程引用 2025 程序集必须 `<Private>false</Private>`**：AutoCAD 宿主提供这些 DLL，若复制到输出目录会与宿主版本冲突。构建时 `MSB3277`（`AdWindows.dll` 等版本冲突）警告可忽略。
+23. **`LangVersion` 在 net8 工程里不要锁 C# 5**：C# 5 上限只是 `csc v4.0.30319` 的限制。net8 用 Roslyn，可自由使用现代语法——但**若要源码双轨共用，仍须保持 C# 5 可编译**，这是硬约束。
+24. **【PdfSharp 1.50 读不了 AutoCAD 2025 的 PDF】**：`PdfReaderException: Invalid entry in XRef table, ID=13, Generation=0, Position=...`。AutoCAD 2025 打印引擎生成的 xref 偏移量 1.50 解析不了（PDF 1.7、传统 xref 表、19KB 量级的小文件也会失败）。**net8 产物必须用 PdfSharp 6.x**；6.x 实测能正确读取（`pages=1, 2835×4008pt`）并完成裁切/合并。
+25. **【PdfSharp 6.x 有 8 个传递依赖】**：`Microsoft.Extensions.{Logging,Logging.Abstractions,DependencyInjection,DependencyInjection.Abstractions,Options,Primitives}`、`System.Diagnostics.DiagnosticSource`、`System.Runtime.CompilerServices.Unsafe`。缺任一个 → `PdfDocument..ctor()` 抛 `FileNotFoundException`。SDK 风格库工程**默认不复制** PackageReference 的 DLL，必须设 `<CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>`。部署时 13 个 DLL 必须同目录。
+26. **【已修复 v0.8】`BPL` 布局批量出图**（原报 `eLayoutNotCurrent` 后进程崩溃）。两个独立缺陷叠加：遍历布局字典时**从不切换** `LayoutManager.Current.CurrentLayout`（→ `eLayoutNotCurrent`，API 要求目标布局必须是当前布局）；`finally` 里无条件 `EndPlot()`（→ 零 `BeginDocument` 时 AccessViolation 杀进程）。
+    修复：先收集布局名（不在遍历字典时改布局上下文）→ 循环内 `CurrentLayout = layName` → `plotStarted` 守卫 → `finally` 恢复 `prevLayout`。验证：2 布局 → 2 个 PDF，`BPL_SUMMARY OK=2 FAIL=0`，`/MediaBox` 均 297×420mm。
+27. **`USERS2` 预设会误触发"加载即出图"**：若 `.scr` 先 `(setvar "users2" "<dir>")` 再 `netload`，`App.Initialize` 会判定为 accoreconsole 场景并直接跑 `BPLOTAUTO`（可能崩溃）。**正确顺序：先 netload（USERS2 为空）→ 再设 USERS2 → 再执行目标命令**：
+    ```lisp
+    (setvar "users2" "")
+    (command "_.netload" "D:/path/BPPlot.dll")
+    (setvar "users2" "D:/output")
+    BPSPLIT
+    ```
+28. **`BP1` 不是"只打一个图框"**：它只是"不弹对话框、用 USERS1/USERS2 默认参数"，`CollectFrames` 仍会收集选择集里的**全部**图框。想只打一个就在选择时只选一个。
+
+29. **【高危，已修复 v0.8】零文档 `EndPlot` → AccessViolation 0xC0000005，进程直接消失**。`PlotEngine.EndPlot()` 在没有成功 `BeginDocument` 过的状态下调用会触发访问违例，**不是可捕获异常**，`try/catch` 完全拦不住，AutoCAD 无任何提示直接退出。典型触发：所有图框都被空窗检测判为 `SKIP`（`pages.Count == 0`）、或所有布局 `BuildPage` 全失败。
+    修复：`PlotFrames2` / `BpLayouts` 各加 `bool plotStarted = false;`，每次 `BeginDocument` 成功后置 `true`，`finally` 里 `if (pe != null && plotStarted) EndPlot()`。**新增任何出图入口都必须照抄这个守卫**。
+30. **【已修复 v0.8】出图引擎不释放 → 同一 AutoCAD 会话第二次出图静默失败**。`EndPlot()` 只结束这一轮出图事务，**不回收 COM 端 `PlotEngine` 实例**。同一会话内第二次出图抛 `BPLOT 致命错误: ePlotAlreadyStarted`，且统计是 `OK=0 FAIL=0`——用户只看到"第二次没出图"，没有失败计数。`PlotEngine` 同时实现 `IDisposable` 和显式 `Destroy()`，**两个都要调**。
+    修复：`ReleaseEngine(pe)` 辅助方法（`Destroy()` + `Dispose()`，各自 try/catch），在 `PlotFrames2` / `BpLayouts` / `BPPREVIEW` 的所有退出路径调用。
+    验证：同一会话连跑 3 次 `BPLOTAUTO` 三次全绿；`BP1 → BP1 → BPLOTMERGE` 连跑同样三次全绿。
+31. **`List.Sort` 是不稳定排序 → Sheet 编号跨次抖动**。A1 横版与 A1 竖版图框面积完全相同（4.99M 图形单位²），按面积单键排序时两次运行顺序互换，`Sheet001/Sheet002` 对应的图框漂移，黄金样张无法复现。
+    修复：`DropContained` 用多级排序键 —— 面积降序 → `MinX` → `MinY` → 宽度。**任何"按面积/尺寸排序"的新逻辑都必须补二级键**。
+32. **`DataGridView` 的 `PerformClick()` 只有控件可见才生效**。无头单测 `BpForm` 时若只 `new BpForm(...)` 不 `Show()`，`Button.PerformClick()` 静默无效（`CanSelect == false`），`DialogResult` 停在 `None`——看起来像"按钮没绑事件"，实际是测试方法问题。
+    正确写法：`form.Show(); Application.DoEvents();` 之后再 `PerformClick()`。
+33. **accoreconsole 下 `GetEntity` 无法用 `.scr` 喂点**。实测 5 种写法全部失败：`2000,28000`（坐标串）、`21000,0`（端点）、`7000,7000`（线上点）、`(sssetfirst nil (ssget ...))` 隐式选择集、单点命令后补空行。坐标串会被当作文本吃掉并返回"未选中对象"。
+    例外：`GetSelection` **可以**用裸 `ALL` + 空行喂进去——`BP1`/`BPLOTMERGE`/`BPREV`/`BPSPLIT` 都是这么测通的。所以**选面（GetSelection）能脚本化，选点/选单体（GetEntity）不能**。验证 `BPTEACH` 这类 `GetEntity` 命令时，改用"手工写入同格式配置 → 验证下游链路消费"的替代覆盖。
 
 ---
 
@@ -362,8 +482,8 @@ for f in sorted(glob.glob('test/out_*/Sheet*.pdf')):
 
 | 位置 | 形式 |
 |---|---|
-| `deploy/PackageContents.xml` | `AppVersion="0.7"` |
-| `deploy/make_bundle.cmd` | `set VER=0.7`（决定 zip 文件名 `BPPlot-v0.7.zip`） |
+| `deploy/PackageContents.xml` | `AppVersion="0.8"` + 两处 `ComponentEntry Version="0.8"` |
+| `deploy/make_bundle.cmd` | `set VER=0.8`（决定 zip 文件名） |
 | `src/BpMenu.cs` | `BPABOUT` 弹窗文案 |
 | `src/BpForm.cs` | 对话框标题 |
 | `src/BPPlot.cs` | `BPVER` LispFunction 返回值 + `BPLOT` 启动日志 |
@@ -376,17 +496,42 @@ for f in sorted(glob.glob('test/out_*/Sheet*.pdf')):
 
 ### 7.2 打包
 
+**双产物打包（v0.7 起）**
+
 ```cmd
-cmd /c build.cmd                :: 先出根目录 BPPlot.dll
-cd deploy && make_bundle.cmd    :: 组装 BPPlot.bundle + bin/ + 安装器 → BPPlot-v0.7.zip
+cmd /c build.cmd                :: netfx: 根 BPPlot.dll（需机器上装有 AutoCAD 2021-2024）
+cmd /c build_net8.cmd           :: net8 : build/bin/Release/net8.0-windows/（需 2025）
+cd deploy && make_bundle.cmd    :: 组装双产物 zip
 ```
 
-- `make_bundle.cmd` **是 GBK 编码**（含中文文件名 `安装到本机.cmd` / `卸载本机.cmd` / `使用说明.txt`），改它必须用 GBK 保存，否则 `copy` 找不到中文文件。
-- `deploy/使用说明.txt` 同样是 GBK + CRLF。
-- `.cs` / `.md` 为 UTF-8 **无 BOM**；`.ps1` 混合（`deploy/install.ps1`、`deploy/uninstall.ps1`、`test/menu_test.ps1`、`test/menu_macro_test.ps1` 带 BOM，其余不带）。保存时保持原状，别让编辑器统一加/去 BOM。
+产物布局（zip 内）：
+
+```
+BPPlot.bundle/PackageContents.xml
+BPPlot.bundle/Contents/netfx/*.dll      A2021-2024  2 个 DLL
+BPPlot.bundle/Contents/net8/*.dll       A2025+     13 个 DLL
+bin/netfx/*.dll  bin/net8/*.dll         安装器取用
+install.ps1  uninstall.ps1  <安装.cmd>  <卸载.cmd>  <说明.txt>
+```
+
+**为什么必须双产物**：AutoCAD 2025 起 ObjectARX 托管程序集改成 .NET 8。Framework 产物在 2025 上虽然能被 `NETLOAD` 接受（实测命令能注册、图能出），但 PdfSharp 1.x 读不了 2025 打印引擎的 PDF，**裁切/合并静默失效**——页尺寸停在整张纸，而 CSV 和日志全是 `OK`。详见坑 #20/#24。
+
+**`make_bundle.cmd` 的过期 netfx 守卫（重要）**：
+脚本会用 `deploy/marker_check.ps1` 探测 netfx DLL 里有没有 `ReleaseEngine` 这个符号（当前源码才有）。没有就判定 netfx 过期，**丢弃 netfx 并改出 `BPPlot-v0.7-a2025.zip`**（2025-only 包，同时换用 `PackageContents-2025.xml` 清单）。
+理由：在没有 2021-2024 的机器上，netfx 产物编不出来，若照常打包就会把带旧 bug 的 DLL（BPL 崩溃 / 引擎泄漏 / 错图）发给 2021-2024 用户。
+`set BPPLOT_ALLOW_STALE_NETFX=1` 可强行打包混合版本，仅在复现历史 bug 时才用。
+
+**清单选择与产物一致**：`PackageContents.xml` 声明 netfx+net8 两份；`PackageContents-2025.xml` 只声明 net8。**声明了 netfx 却不存在对应目录**会让 2021-2024 尝试加载缺失模块，所以两者必须成对切换。
+
+**编码纪律**：
+- `make_bundle.cmd` 是 **ASCII-only**（中文名包装文件用 `for %%f in (*.cmd)` 通配复制，不写死中文名），改它别引入非 ASCII 字符。
+- `deploy/使用说明.txt`、`安装到本机.cmd`、`卸载本机.cmd` 是 **GBK + CRLF**，改这些必须按 GBK 保存，否则中文全乱。
+- `deploy/*.ps1` 是 **UTF-8 with BOM + CRLF**（BOM 不能去，Windows PowerShell 5.1 靠它正确识别中文）。
+- `deploy/PackageContents*.xml` 是 UTF-8 无 BOM + CRLF。
+- `.cs` / `.md` 为 UTF-8 **无 BOM**。保存时保持原状，别让编辑器统一加/去 BOM。
 - `.gitattributes` 已声明 `* text=auto`、`*.cmd text eol=crlf`、`*.scr text`、`*.dll binary`、`*.dwg binary`、`*.pdf binary` 等，别随意改。
   - **已知问题**：`*.scr text` 缺 `eol=crlf`，配合本机 `core.autocrlf=true` 会导致 git 里存 LF、检出的磁盘是 CRLF。建议改为 `*.scr text eol=crlf`（见 §5.1）。
-- zip 内的 `BPPlot.dll` 必须与仓库根目录 `BPPlot.dll` **完全一致**（同一份构建产物），不得分别编译。
+- zip 内的 netfx `BPPlot.dll` 必须与仓库根目录 `BPPlot.dll` **完全一致**，net8 目录必须与 `build/bin/Release/net8.0-windows/` 一致，不得分别编译。
 
 ### 7.3 产物入库策略（本仓库特意入库，别"顺手清理"）
 
@@ -395,7 +540,8 @@ cd deploy && make_bundle.cmd    :: 组装 BPPlot.bundle + bin/ + 安装器 → B
 - DLL 入库是刻意的：用户 `NETLOAD` 即用、无需自备编译环境（README 已声明）。
 - 因此**改源码必须重编译并同批提交 DLL**，否则仓库里的 DLL 与源码脱节。
 - 根目录 `PdfSharp.dll` 与 `libs/PdfSharp.dll` 当前内容一致（**1.50.5147.0**，同一版本）；升级 PdfSharp 必须两处同步 + 重新打包 zip。DESIGN.md M8 计划的 net8 产物需改用 PdfSharp 6.x（源码共用、双轨引用）。
-- `deploy/BPPlot-v0.7.zip` 入库意味着**每次发版都要重新生成它**，否则用户下载到旧包。zip 内 `bin/BPPlot.dll` 需与仓库根 DLL 字节一致。
+- `deploy/BPPlot-v0.7.zip` 入库意味着**每次发版都要重新生成它**，否则用户下载到旧包。
+- **v0.7 起发布包可能是 `BPPlot-v0.7-a2025.zip`**（2025-only）。这是 `make_bundle.cmd` 的过期 netfx 守卫在起作用：本机没有 2021-2024，netfx 编不出来。在有 2021-2024 的机器上重编后重跑 `make_bundle.cmd`，会重新产出双产物 `BPPlot-v0.7.zip`。**两个 zip 不要同时存在**，旧的删掉，避免用户下错。
 - `libs/pc3_dwg2pdf_body.bin` 是 M3 的 pc3 种子数据（**当前代码未引用**，纯预留），勿删勿改。
 
 ### 7.3.1 DLL 入库的代价与纪律

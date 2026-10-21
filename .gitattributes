@@ -1,6 +1,6 @@
 * text=auto
 *.cmd text eol=crlf
-*.scr text
+*.scr text eol=crlf
 *.cs text
 *.md text
 *.dll binary

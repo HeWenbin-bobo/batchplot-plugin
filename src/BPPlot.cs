@@ -47,6 +47,15 @@ namespace BpPlot
     {
         public void Initialize()
         {
+            // .NET 8+（AutoCAD 2025 起）默认不内置 ANSI 代码页（1252/936 等），
+            // 而 PdfSharp 1.x 内部 Encoding.GetEncoding(1252) 会抛 NotSupportedException，
+            // 导致 CropPdf/MergePdfs/BPSELFTEST 的 Save() 全部静默失败（只写出空壳 PDF）。
+            // 这行只对 net8 产物生效；.NET Framework 产物走 #if 分支被排除。
+#if NET8_0_OR_GREATER
+            try { System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance); }
+            catch { }
+#endif
+
             // 图形界面：挂「BP-批量打印」菜单栏（重复 NETLOAD 自动去重）
             bool isConsole = false;
             try
@@ -596,7 +605,7 @@ namespace BpPlot
         [LispFunction("BPVER")]
         public object BpVerLisp(ResultBuffer args)
         {
-            return new ResultBuffer(new TypedValue((int)LispDataType.Text, "BPPlot v0.7"));
+            return new ResultBuffer(new TypedValue((int)LispDataType.Text, "BPPlot v0.8"));
         }
 
         // ---------- 部署自检：验证当前环境里 PdfSharp 可加载、裁切管线可用 ----------
@@ -735,11 +744,17 @@ namespace BpPlot
                 log("页面渲染完成（预览窗口应已弹出，关闭后继续）");
                 pe.EndDocument(null);
                 pe.EndPlot(null);
+                ReleaseEngine(pe);
+                pe = null;
                 log("== 预览流程全部成功 ==");
             }
             catch (System.Exception ex)
             {
                 log("预览失败 @ " + ex.GetType().Name + ": " + ex.Message);
+            }
+            finally
+            {
+                if (pe != null) ReleaseEngine(pe);
             }
         }
 
@@ -797,6 +812,10 @@ namespace BpPlot
         }
 
         // ---------- 布局批量出图：逐布局用其自身页面设置出 PDF ----------
+        // PlotInfo.Validate() 要求 pi.Layout 指向的布局必须是"当前布局"，否则抛
+        // eLayoutNotCurrent。因此必须逐布局切换 LayoutManager.Current.CurrentLayout，
+        // 出完再恢复原布局（失败也要恢复）。布局名用 lay.LayoutName 而非字典键
+        // （字典键是 "Layout1"/"Layout2"，与用户可见名可能不同）。
         [CommandMethod("BPL", CommandFlags.Modal)]
         public void BpLayouts()
         {
@@ -813,11 +832,15 @@ namespace BpPlot
             try { oldBg = Application.GetSystemVariable("BACKGROUNDPLOT"); Application.SetSystemVariable("BACKGROUNDPLOT", 0); } catch { }
 
             int ok = 0, fail = 0;
+            bool plotStarted = false;   // 同 PlotFrames2：零文档 EndPlot 会 AccessViolation
             PlotEngine pe = null;
+            string prevLayout = null;
+            try { prevLayout = LayoutManager.Current.CurrentLayout; } catch { }
+
             try
             {
-                pe = PlotFactory.CreatePublishEngine();
-                pe.BeginPlot(null, null);
+                // 先收集布局名：避免在遍历字典的同时切换当前布局（会改动布局上下文）
+                List<string> layoutNames = new List<string>();
                 using (Transaction tr = db.TransactionManager.StartTransaction())
                 {
                     DBDictionary layDict = (DBDictionary)tr.GetObject(db.LayoutDictionaryId, OpenMode.ForRead);
@@ -825,31 +848,68 @@ namespace BpPlot
                     {
                         Layout lay = (Layout)tr.GetObject(de.Value, OpenMode.ForRead);
                         if (lay.ModelType) continue;   // 模型空间走 BPLOT
-                        try
+                        layoutNames.Add(lay.LayoutName);
+                    }
+                    tr.Commit();
+                }
+                if (layoutNames.Count == 0)
+                    ed.WriteMessage("BPL: 图纸中没有图纸空间布局（只有 Model）\n");
+
+                pe = PlotFactory.CreatePublishEngine();
+                pe.BeginPlot(null, null);
+
+                foreach (string layName in layoutNames)
+                {
+                    ed.WriteMessage("  ... 切换到布局 [" + layName + "]\n");
+                    try
+                    {
+                        // 关键：出图前必须把目标布局设为当前布局
+                        LayoutManager.Current.CurrentLayout = layName;
+
+                        ObjectId layId = LayoutManager.Current.GetLayoutId(layName);
+                        using (Transaction tr = db.TransactionManager.StartTransaction())
                         {
+                            Layout lay = (Layout)tr.GetObject(layId, OpenMode.ForRead);
+
                             PlotInfo pi = new PlotInfo();
                             pi.Layout = lay.ObjectId;
                             PlotInfoValidator piv = new PlotInfoValidator();
                             piv.MediaMatchingPolicy = MatchingPolicy.MatchEnabled;
                             piv.Validate(pi);
+
                             string file = Path.Combine(outDir, Sanitize(lay.LayoutName) + ".pdf");
                             pe.BeginDocument(pi, Path.GetFileName(doc.Name), null, 1, true, file);
+                            plotStarted = true;
                             EmitPage(pe, pi, true);
                             pe.EndDocument(null);
+                            tr.Commit();
                             ok++;
                             ed.WriteMessage("  [OK] " + lay.LayoutName + " -> " + Path.GetFileName(file) + "\n");
                         }
-                        catch (System.Exception ex)
-                        {
-                            fail++;
-                            ed.WriteMessage("  [FAIL] " + lay.LayoutName + ": " + ex.Message + "\n");
-                        }
                     }
-                    tr.Commit();
+                    catch (System.Exception ex)
+                    {
+                        fail++;
+                        // 单布局失败要复位引擎，否则后续布局全部连带失败
+                        try { pe.EndDocument(null); } catch { }
+                        ed.WriteMessage("  [FAIL] " + layName + ": " + ex.Message + "\n");
+                    }
                 }
             }
             catch (System.Exception ex) { ed.WriteMessage("BPL 致命错误: " + ex.Message + "\n"); }
-            finally { if (pe != null) { try { pe.EndPlot(null); } catch { } } }
+            finally
+            {
+                if (pe != null)
+                {
+                    if (plotStarted) { try { pe.EndPlot(null); } catch { } }
+                    ReleaseEngine(pe);
+                }
+                // 恢复用户原来的布局（无论成功失败）
+                if (prevLayout != null && prevLayout.Length > 0)
+                {
+                    try { LayoutManager.Current.CurrentLayout = prevLayout; } catch { }
+                }
+            }
             ed.WriteMessage(string.Format("BPL_SUMMARY OK={0} FAIL={1}\n", ok, fail));
             if (oldBg != null) { try { Application.SetSystemVariable("BACKGROUNDPLOT", oldBg); } catch { } }
         }
@@ -988,6 +1048,17 @@ namespace BpPlot
             PlotFrames2(doc, frames, scale, outDir, mono, margin, ReadMerge());
         }
 
+        // 出图引擎必须显式释放：EndPlot 只结束"这一轮出图事务"，不回收 COM 端引擎实例。
+        // 不释放的话，同一 AutoCAD 会话里第二次出图会抛 ePlotAlreadyStarted
+        // （脚本连打 BPLOTAUTO / 先 BPLOT 再 BP1 都会中招，用户只看到"第二次没出图"）。
+        void ReleaseEngine(PlotEngine pe)
+        {
+            try { pe.Destroy(); }
+            catch (System.Exception) { }
+            try { pe.Dispose(); }
+            catch (System.Exception) { }
+        }
+
         void PlotFrames2(Document doc, List<FrameInfo> frames, int scale, string outDir, bool mono, double margin, bool merge)
         {
             Editor ed = doc.Editor;
@@ -1007,7 +1078,7 @@ namespace BpPlot
                     + " 个，实际出图 " + frames.Count + " 个\n");
             if (outDir == null || outDir.Trim().Length == 0)
                 outDir = DefaultOutDir(doc.Database, "PDF_OUT");
-            ed.WriteMessage(string.Format("\nBPLOT v0.7: {0} 个图框，比例 1:{1}{2}{3}{4}，输出 {5}\n",
+            ed.WriteMessage(string.Format("\nBPLOT v0.8: {0} 个图框，比例 1:{1}{2}{3}{4}，输出 {5}\n",
                 frames.Count, scale, mono ? "，黑白" : "，彩色",
                 margin != 0 ? "，留白" + margin.ToString("0.##") + "mm" : "",
                 merge ? "，合成单PDF" : "", outDir));
@@ -1016,6 +1087,10 @@ namespace BpPlot
             List<string[]> csvRows = new List<string[]>();
 
             PlotEngine pe = null;
+            // 是否真正 BeginDocument 过：EndPlot 在"零文档"状态下会触发
+            // AccessViolation（进程直接崩溃，不是可捕获异常）。
+            // 触发场景：图纸里所有图框都被判定为空窗 SKIP，pages.Count == 0。
+            bool plotStarted = false;
             try
             {
                 Directory.CreateDirectory(outDir);
@@ -1119,6 +1194,7 @@ namespace BpPlot
                         try
                         {
                             pe.BeginDocument(pi, Path.GetFileName(doc.Name), null, 1, true, file);
+                            plotStarted = true;
                             EmitPage(pe, pi, true);
                             pe.EndDocument(null);
                             ok++;
@@ -1174,9 +1250,13 @@ namespace BpPlot
             }
             finally
             {
+                // 只有真正 BeginDocument 过才能 EndPlot。
+                // 零文档时调用 EndPlot 会 AccessViolation（不可捕获，直接杀进程），
+                // 典型触发：所有图框空窗 SKIP，pages.Count == 0。
                 if (pe != null)
                 {
-                    try { pe.EndPlot(null); } catch { }
+                    if (plotStarted) { try { pe.EndPlot(null); } catch { } }
+                    ReleaseEngine(pe);
                 }
             }
 
@@ -1771,7 +1851,20 @@ namespace BpPlot
 
         void DropContained(List<FrameInfo> frames)
         {
-            frames.Sort(delegate(FrameInfo a, FrameInfo b) { return b.AreaX.CompareTo(a.AreaX); });
+            // 排序：面积降序（BPPREVIEW 的 frames[0] 依赖此序取最大框）。
+            // 等面积时用几何坐标做稳定的次级排序 —— List.Sort 是不稳定排序，
+            // 不加次级键时同面积的两框（如同尺寸横竖版）每次运行可能顺序互换，
+            // 导致 Sheet 编号与 CSV 序号在回归中抖动。
+            frames.Sort(delegate(FrameInfo a, FrameInfo b)
+            {
+                int c = b.AreaX.CompareTo(a.AreaX);
+                if (c != 0) return c;
+                c = a.MinX.CompareTo(b.MinX);
+                if (c != 0) return c;
+                c = a.MinY.CompareTo(b.MinY);
+                if (c != 0) return c;
+                return (a.MaxX - a.MinX).CompareTo(b.MaxX - b.MinX);
+            });
             List<FrameInfo> kept = new List<FrameInfo>();
             foreach (FrameInfo f in frames)
             {

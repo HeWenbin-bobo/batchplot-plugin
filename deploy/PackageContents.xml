@@ -1,12 +1,40 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  BPPlot 双产物清单。
+
+  为什么必须分成两个 <Components> 块：
+  AutoCAD 2025 起 ObjectARX 托管程序集改成 .NET 8（此前是 .NET Framework 4.x），
+  同一份 DLL 不可能跨这个边界——.NET Framework 产物在 2025 上虽然能被 NETLOAD
+  吞下去，但 PdfSharp 1.x 读不了 2025 打印引擎产出的 PDF，裁切/合并会静默失效
+  （页尺寸停在整张纸，CSV 和日志还全是 OK）。所以两套二进制必须分开。
+
+  当前版本矩阵（实测结论，见 research/功能验证报告.md）：
+    R24.0 - R24.3  (2021-2024)  ->  Contents/netfx  (.NET Framework 4.x, PdfSharp 1.50)
+    R25.0          (2025)       ->  Contents/net8   (.NET 8.0,        PdfSharp 6.1.1)
+
+  AutoCAD 2026（R25.1）尚未实测，因此 SeriesMax 停在 R25.0 —— 按 Autodesk
+  论坛的建议，宁可让它不加载，也不要让它加载一个没验证过的二进制。
+-->
 <ApplicationPackage SchemaVersion="1.0"
-                    AppVersion="0.7"
+                    AppVersion="0.8"
                     Name="BPPlot 批量打印"
                     Author="hwdemtv"
                     Description="AutoCAD 批量打印插件：图框自动识别、精确比例批量出图、合并书签、无头批打">
   <CompanyDetails Name="hwdemtv" Url="https://github.com/hwdemtv/batchplot-plugin" Email="hwdemtv@qq.com"/>
-  <RuntimeRequirements OS="Win64" Platform="AutoCAD" SeriesMin="R24.0" SeriesMax="R24.3"/>
-  <Components Description="BPPlot">
-    <ComponentEntry AppName="BPPlot" ModuleName="./Contents/BPPlot.dll" AppType="NET"/>
+
+  <!-- AutoCAD 2021-2024：.NET Framework 4.x 产物 -->
+  <Components Description="BPPlot for AutoCAD 2021-2024 (.NET Framework)">
+    <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R24.0" SeriesMax="R24.3"/>
+    <ComponentEntry AppName="BPPlot" Version="0.8" ModuleName="./Contents/netfx/BPPlot.dll" AppType="NET">
+      <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R24.0" SeriesMax="R24.3"/>
+    </ComponentEntry>
+  </Components>
+
+  <!-- AutoCAD 2025+：.NET 8 产物（13 个 DLL 必须同目录） -->
+  <Components Description="BPPlot for AutoCAD 2025+ (.NET 8)">
+    <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R25.0" SeriesMax="R25.0"/>
+    <ComponentEntry AppName="BPPlot" Version="0.8" ModuleName="./Contents/net8/BPPlot.dll" AppType="NET">
+      <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R25.0" SeriesMax="R25.0"/>
+    </ComponentEntry>
   </Components>
 </ApplicationPackage>

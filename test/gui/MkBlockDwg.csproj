@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- 生成一个"图块式图框"测试图纸（blk.dwg），用于验证 BPTEACH 学习结果 / BPREV / BPSPLIT
+       这条需要块属性标签的链路。原始 test/test_dwg.dwg 里只有 3 个空白多段线框，覆盖不到。
+       块名 TITLEBLOCK_A3 与属性标签 TUHAO/TUMING/BILI/BANCI/RIQI 刻意不用中文，
+       以证明识别结果只可能来自 config.json 的学习记录，而非内置猜测规则。
+       前置：build_net8.cmd 已产出 BPPlot.dll（仅作为参考，本工程不引用它）
+       用法：accoreconsole /i empty.dwg /s mkblk.scr   （脚本里 netload 本 DLL 后执行 MKBLK）
+       输出：%BPBLK_OUT%\blk.dwg（默认 %TEMP%\blk.dwg） -->
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>MkBlk</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <AcadDir Condition="'$(ACAD_DIR)' != ''">$(ACAD_DIR)</AcadDir>
+    <AcadDir Condition="'$(AcadDir)' == ''">D:\Program Files\Autodesk\AutoCAD 2025</AcadDir>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="MkBlockDwg.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="acmgd"><HintPath>$(AcadDir)\acmgd.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="acdbmgd"><HintPath>$(AcadDir)\acdbmgd.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="accoremgd"><HintPath>$(AcadDir)\accoremgd.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+</Project>

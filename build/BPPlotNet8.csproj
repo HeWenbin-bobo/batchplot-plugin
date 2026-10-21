@@ -1,0 +1,103 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    BPPlotNet8 — AutoCAD 2025+ (net8.0) 产物
+    ============================================
+    与主产物 BPPlot.dll（.NET Framework 4.0 / AutoCAD 2013-2024）共用同一份 src/ 源码。
+
+    用法：
+      cmd /c build_net8.cmd
+    或：
+      dotnet build -c Release
+
+    ACAD_DIR 可通过环境变量覆盖（默认 2025 安装路径）：
+      set ACAD_DIR=D:\Program Files\Autodesk\AutoCAD 2026
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <OutputType>Library</OutputType>
+
+    <!-- 源码双轨共用：不锁 C# 版本；但源码本身仍保持 C# 5 可编译（主产物约束） -->
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+
+    <AssemblyName>BPPlot</AssemblyName>
+    <RootNamespace>BpPlot</RootNamespace>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <AppendTargetFrameworkToOutputPath>true</AppendTargetFrameworkToOutputPath>
+
+    <!-- AutoCAD 程序集版本冲突（AdWindows/AcCustomize 等）属正常，屏蔽 -->
+    <NoWarn>CS0618;CS0649;CS0169;CS0219;MSB3277</NoWarn>
+
+    <!-- 允许在非 Windows SDK 环境下解析 windows TFM（CI 兜底） -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+
+    <!--
+      关键：把 NuGet 依赖（PdfSharp 6 及其 8 个 Microsoft.Extensions.* 传递依赖）
+      全部复制到输出目录。这是 SDK 风格工程的标准开关；
+      不开的话 net8 库工程默认不复制 PackageReference 的 DLL。
+    -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <AcadDir Condition="'$(ACAD_DIR)' != ''">$(ACAD_DIR)</AcadDir>
+    <AcadDir Condition="'$(AcadDir)' == ''">D:\Program Files\Autodesk\AutoCAD 2025</AcadDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="../src/BPPlot.cs" />
+    <Compile Include="../src/BpForm.cs" />
+    <Compile Include="../src/BpMenu.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- AutoCAD 宿主提供的程序集：Private=false，绝不随产物复制 -->
+    <Reference Include="acmgd">
+      <HintPath>$(AcadDir)\acmgd.dll</HintPath><Private>false</Private>
+    </Reference>
+    <Reference Include="acdbmgd">
+      <HintPath>$(AcadDir)\acdbmgd.dll</HintPath><Private>false</Private>
+    </Reference>
+    <Reference Include="accoremgd">
+      <HintPath>$(AcadDir)\accoremgd.dll</HintPath><Private>false</Private>
+    </Reference>
+    <Reference Include="AcCui">
+      <HintPath>$(AcadDir)\AcCui.dll</HintPath><Private>false</Private>
+    </Reference>
+    <Reference Include="Autodesk.AutoCAD.Interop">
+      <HintPath>$(AcadDir)\Autodesk.AutoCAD.Interop.dll</HintPath><Private>false</Private>
+    </Reference>
+    <Reference Include="Autodesk.AutoCAD.Interop.Common">
+      <HintPath>$(AcadDir)\Autodesk.AutoCAD.Interop.Common.dll</HintPath><Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      PdfSharp 6.x（net8 产物专用）。
+      必须用 6.x：PdfSharp 1.50 无法解析 AutoCAD 2025 打印引擎产出的 PDF，
+      会抛 PdfReaderException "Invalid entry in XRef table"，
+      导致 CropPdf/MergePdfs 全部失败（且被 catch 吞掉，表现为"裁切静默不生效"）。
+      主产物（.NET Framework）仍用 libs/PdfSharp.dll (1.50)。
+    -->
+    <PackageReference Include="PdfSharp" Version="6.1.1" />
+  </ItemGroup>
+
+  <!--
+    显式把 PdfSharp 6.x 复制到输出目录。
+    PackageReference 的 Private 元数据在多目标/传递依赖场景下不总是生效，
+    而插件部署必须保证 PdfSharp.dll 与 BPPlot.dll 同目录（用户机器上没有）。
+  -->
+  <!--
+    把 PdfSharp 6.x 及其全部传递依赖复制到输出目录。
+    PdfSharp 6 依赖 Microsoft.Extensions.Logging.Abstractions 等 8 个包，
+    缺一个就会在 PdfDocument..ctor() 抛 FileNotFoundException，
+    而该异常会被 CropPdf 的 catch 吞掉，表现为"裁切静默不生效"。
+
+    做法：读 NuGet 的 project.assets.json 解析出的 runtime 资产路径。
+  -->
+  
+</Project>
