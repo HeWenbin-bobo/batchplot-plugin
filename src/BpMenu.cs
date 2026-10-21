@@ -180,7 +180,7 @@ namespace BpPlot
         public void BpAbout()
         {
             Application.ShowAlertDialog(
-                "BPPlot v0.7 — AutoCAD 批量打印插件\n" +
+                "BPPlot v0.8 — AutoCAD 批量打印插件\n" +
                 "图框自动识别 · 精确比例批量出图 · 合并书签 · 无头批打\n\n" +
                 "开源: github.com/hwdemtv/batchplot-plugin\n" +
                 "License: MIT");

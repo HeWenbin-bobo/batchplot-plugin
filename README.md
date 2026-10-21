@@ -25,7 +25,69 @@ with bookmarks, exports a sheet schedule CSV, and runs **headless via accorecons
 
 PDF 合并用 PdfSharp（MIT 协议，libs/ 内）。
 
-## v0.7 新增（当前开发版）
+## v0.8（2026-10）— AutoCAD 2025 正式支持 + 5 个静默缺陷修复
+
+本版解决了一类最危险的问题：**出了图、日志全绿、CSV 全 OK，但结果是错的**。
+
+### 一、AutoCAD 2025 支持（双产物发布）
+
+| AutoCAD | 产物 | 依赖 |
+|---|---|---|
+| 2021–2024 | .NET Framework 4.x | `BPPlot.dll` + `PdfSharp.dll`（2 个） |
+| 2025 | .NET 8.0 | 13 个 DLL（PdfSharp 6.1.1 + `Microsoft.Extensions.*`） |
+
+安装器按本机 AutoCAD 版本自动选择产物，无需用户判断。
+
+**为什么必须分两套**：2025 起 ObjectARX 托管程序集改成 .NET 8，与 Framework 产物不兼容。Framework 版在 2025 上**能被 NETLOAD 接受、也能出图**，但 PdfSharp 1.x 读不了 2025 打印引擎的 PDF，裁切与合并**静默失效**——PDF 照样生成、日志照样 `OK`，但每页都是整张纸（含大片空白）。实测：Sheet001 输出 `1000.1×1413.9` 而非应有的 `1189.0×845.7`。
+
+打通这条链路需要三处修复，缺一不可：
+1. `.NET 8` 不内置 ANSI 代码页 → `Encoding.RegisterProvider(CodePagesEncodingProvider.Instance)`
+2. PdfSharp 1.50 无法解析 2025 的 PDF（`Invalid entry in XRef table`）→ 升级 PdfSharp 6.1.1
+3. PdfSharp 6.x 有 8 个传递依赖，SDK 工程默认不复制 → `<CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>`
+
+### 二、修复的 5 个缺陷
+
+| # | 缺陷 | 症状 | 性质 |
+|---|---|---|---|
+| 1 | `BPL` 从不切换当前布局 | `eLayoutNotCurrent` 后进程崩溃 | 功能完全不可用 |
+| 2 | 零文档 `EndPlot` | AccessViolation 0xC0000005，进程直接消失 | 不可捕获的崩溃 |
+| 3 | 出图引擎不释放 | 同一会话第二次出图 `ePlotAlreadyStarted`，且统计 `OK=0 FAIL=0` | 静默失败 |
+| 4 | `DropContained` 排序不稳定 | 等面积图框（A1 横/竖）Sheet 编号跨次抖动 | 结果不可复现 |
+| 5 | `BpForm` 表格列可排序 | 排序后行内改的文件名落到**别的图框** | **静默错图** |
+
+其中 #2 尤其危险：`try/catch` 完全拦不住，AutoCAD 无任何提示直接退出。触发条件是"所有图框都被空窗检测判为 SKIP"。修复是给 `EndPlot` 加 `plotStarted` 守卫。
+
+#5 的实证：修复前"首行显示 A-102，改的文件名却写回到 A-101"。
+
+### 三、可复现的验证基建
+
+不再依赖"人工点一遍"：
+
+```cmd
+build_net8.cmd
+test\run_all_net8.cmd      :: 全量 14 项 PASS/FAIL，退出码即结论
+```
+
+- 判定只认 PDF `/MediaBox` 换算的毫米数，**不信 CSV 的 OK 和日志的 `[crop]`**（本轮 5 个缺陷中 3 个都能骗过这两者）
+- `test/gui/BpFormTest`：出图对话框 24 项无头单测（脱离 AutoCAD 实例化 WinForms）
+- `test/gui/MkBlockDwg`：生成图块式图框测试图（块名/属性标签刻意不用中文，证明识别来自学习配置）
+
+### 四、部署链路
+
+- `install.ps1` 按版本选产物，缺对应产物则跳过并提示，不再静默失败
+- `make_bundle.cmd` 加**过期 netfx 守卫**：探测 DLL 里有无当前源码才有的符号，没有就判定过期并改出 2025-only 包，避免把带旧 bug 的二进制发给旧版用户
+- 卸载保留 `config.json`（重学图框块名很烦）
+
+### 已知限制
+
+- **命令行（accoreconsole）场景仍需手动 `NETLOAD`**：HKCU 按需加载注册表在该场景不生效（实测报"未知命令"）。GUI 点菜单会自动完成。
+- **`BPLOT` 对话框未做真人操作验证**：24 项逻辑已单测覆盖，但从命令进模态对话框那一跳无法脚本驱动（模态循环占死主线程，COM 全部 `RPC_E_CALL_REJECTED`）。
+- **AutoCAD 2026 未实测**：清单 `SeriesMax` 停在 `R25.0`，不会自动加载。
+- **本次发布包为 `-a2025` 单产物版**：本机无 AutoCAD 2021-2024，Framework 版 DLL 无法重编。需要旧版支持请在装有 2021-2024 的机器上执行 `build.cmd` 后重跑 `make_bundle.cmd`。
+
+---
+
+## v0.7（历史）新增
 
 1. **菜单栏「BP-批量打印」**：NETLOAD 即自动挂到菜单栏（与 M-批打印 并列），11 项全命令入口 +
    使用说明/关于；纯代码实现（AcCui 运行时生成部分菜单 CUI + COM 挂载），无 .cuix 附件。
@@ -47,8 +109,8 @@ PDF 合并用 PdfSharp（MIT 协议，libs/ 内）。
 ## 快速开始（30 秒版）
 
 ```text
-1. 下载 Releases 里的 `BPPlot-v0.7.zip`（双产物，2021–2025 通用）或
-   `BPPlot-v0.7-a2025.zip`（仅 2025）并解压
+1. 下载 Releases 里的 `BPPlot-v0.8.zip`（双产物，2021–2025 通用）或
+   `BPPlot-v0.8-a2025.zip`（仅 2025）并解压
 2. 双击「安装到本机.cmd」（免管理员；自动复制程序并写入当前用户的按需加载注册表）
 3. 完全退出并重启 AutoCAD —— 菜单栏出现「BP-批量打印」，命令 BPLOT / BPLOTAUTO 等
    输入即用（无需 NETLOAD）
@@ -197,7 +259,7 @@ cmd /c build.cmd
 
 **方式 A（推荐）：安装脚本 + 注册表按需加载**
 
-Release 的 `BPPlot-v0.7.zip` 解压后双击「安装到本机.cmd」，它做三件事：
+Release 的 `BPPlot-v0.8.zip` 解压后双击「安装到本机.cmd」，它做三件事：
 1. 程序复制到 `%APPDATA%\BPPlot\bin\`（稳定路径）；
 2. 对本机检测到的每个 AutoCAD 版本写入 `HKCU\...\Applications\BPPlot` 按需加载键
    （`LOADCTRLS=2` 命令调用时自动加载 + `COMMANDS` 子键列出全部命令；仅当前用户，免管理员）；
@@ -287,7 +349,7 @@ _.quit _y                                    ; accoreconsole: _y=放弃修改；
 
 ## 路线图
 
-**已完成**（详见上方版本历史）：菜单栏 BP-批量打印（v0.7）｜单张打印预览 BPPREVIEW（v0.7）｜出图对话框 BPLOT（v0.5）｜合成单 PDF+书签（v0.4）｜布局批量出图 BPL（v0.4）｜DWG 拆分 BPSPLIT（v0.4）｜图框学习 BPTEACH+天正 T20 块名兼容（v0.3）｜文件名模板（v0.3）｜黑白打印 monochrome.ctb（v0.2）
+**已完成**（详见上方版本历史）：AutoCAD 2025 双产物支持（v0.8）｜5 个静默缺陷修复（v0.8）｜菜单栏 BP-批量打印（v0.7）｜单张打印预览 BPPREVIEW（v0.7）｜出图对话框 BPLOT（v0.5）｜合成单 PDF+书签（v0.4）｜布局批量出图 BPL（v0.4）｜DWG 拆分 BPSPLIT（v0.4）｜图框学习 BPTEACH+天正 T20 块名兼容（v0.3）｜文件名模板（v0.3）｜黑白打印 monochrome.ctb（v0.2）
 
 **待办**：
 1. 多 DWG 目录遍历——第一步补一个 `for %%f in (*.dwg)` 循环调 accoreconsole 的批处理脚本（含失败清单汇总）；accoreconsole 多进程并行按需评估（并行时每进程需独立 DWG 与输出目录，license 占用翻倍）

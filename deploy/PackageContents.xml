@@ -16,7 +16,7 @@
   论坛的建议，宁可让它不加载，也不要让它加载一个没验证过的二进制。
 -->
 <ApplicationPackage SchemaVersion="1.0"
-                    AppVersion="0.7"
+                    AppVersion="0.8"
                     Name="BPPlot 批量打印"
                     Author="hwdemtv"
                     Description="AutoCAD 批量打印插件：图框自动识别、精确比例批量出图、合并书签、无头批打">
@@ -25,7 +25,7 @@
   <!-- AutoCAD 2021-2024：.NET Framework 4.x 产物 -->
   <Components Description="BPPlot for AutoCAD 2021-2024 (.NET Framework)">
     <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R24.0" SeriesMax="R24.3"/>
-    <ComponentEntry AppName="BPPlot" Version="0.7" ModuleName="./Contents/netfx/BPPlot.dll" AppType="NET">
+    <ComponentEntry AppName="BPPlot" Version="0.8" ModuleName="./Contents/netfx/BPPlot.dll" AppType="NET">
       <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R24.0" SeriesMax="R24.3"/>
     </ComponentEntry>
   </Components>
@@ -33,7 +33,7 @@
   <!-- AutoCAD 2025+：.NET 8 产物（13 个 DLL 必须同目录） -->
   <Components Description="BPPlot for AutoCAD 2025+ (.NET 8)">
     <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R25.0" SeriesMax="R25.0"/>
-    <ComponentEntry AppName="BPPlot" Version="0.7" ModuleName="./Contents/net8/BPPlot.dll" AppType="NET">
+    <ComponentEntry AppName="BPPlot" Version="0.8" ModuleName="./Contents/net8/BPPlot.dll" AppType="NET">
       <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R25.0" SeriesMax="R25.0"/>
     </ComponentEntry>
   </Components>

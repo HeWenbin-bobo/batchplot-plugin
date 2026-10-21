@@ -482,8 +482,8 @@ AutoCAD 插件最难验证的两块——**WinForms 对话框**和**需要交互
 
 | 位置 | 形式 |
 |---|---|
-| `deploy/PackageContents.xml` | `AppVersion="0.7"` |
-| `deploy/make_bundle.cmd` | `set VER=0.7`（决定 zip 文件名 `BPPlot-v0.7.zip`） |
+| `deploy/PackageContents.xml` | `AppVersion="0.8"` + 两处 `ComponentEntry Version="0.8"` |
+| `deploy/make_bundle.cmd` | `set VER=0.8`（决定 zip 文件名） |
 | `src/BpMenu.cs` | `BPABOUT` 弹窗文案 |
 | `src/BpForm.cs` | 对话框标题 |
 | `src/BPPlot.cs` | `BPVER` LispFunction 返回值 + `BPLOT` 启动日志 |

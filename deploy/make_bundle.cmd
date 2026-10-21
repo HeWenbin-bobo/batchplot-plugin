@@ -34,7 +34,7 @@ rem ===========================================================================
 setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
-set VER=0.7
+set VER=0.8
 set STAGE=%TEMP%\bpplot_bundle_stage
 set MARKER=ReleaseEngine
 set MFEXE=%~dp0marker_check.ps1

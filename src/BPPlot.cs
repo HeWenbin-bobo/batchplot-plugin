@@ -605,7 +605,7 @@ namespace BpPlot
         [LispFunction("BPVER")]
         public object BpVerLisp(ResultBuffer args)
         {
-            return new ResultBuffer(new TypedValue((int)LispDataType.Text, "BPPlot v0.7"));
+            return new ResultBuffer(new TypedValue((int)LispDataType.Text, "BPPlot v0.8"));
         }
 
         // ---------- 部署自检：验证当前环境里 PdfSharp 可加载、裁切管线可用 ----------
@@ -1078,7 +1078,7 @@ namespace BpPlot
                     + " 个，实际出图 " + frames.Count + " 个\n");
             if (outDir == null || outDir.Trim().Length == 0)
                 outDir = DefaultOutDir(doc.Database, "PDF_OUT");
-            ed.WriteMessage(string.Format("\nBPLOT v0.7: {0} 个图框，比例 1:{1}{2}{3}{4}，输出 {5}\n",
+            ed.WriteMessage(string.Format("\nBPLOT v0.8: {0} 个图框，比例 1:{1}{2}{3}{4}，输出 {5}\n",
                 frames.Count, scale, mono ? "，黑白" : "，彩色",
                 margin != 0 ? "，留白" + margin.ToString("0.##") + "mm" : "",
                 merge ? "，合成单PDF" : "", outDir));
