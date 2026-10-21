@@ -84,10 +84,16 @@ cmd /c build_diag.cmd     :: 产出 BPDiag.dll（诊断工具，独立编译）
   | 产物 | 工具链 | 引用 | 覆盖 |
   |---|---|---|---|
   | `BPPlot.dll` | `csc.exe`（.NET Framework 4.0） | 2021–2024 安装目录程序集 | 2013–2024 |
-  | `BPPlotNet8.dll` | `dotnet build`（`net8.0-windows`） | **2025 安装目录程序集，无需 ObjectARX SDK** | 2025+ |
+  | `BPPlot.dll`（net8 同名产物） | `dotnet build`（`net8.0-windows`） | **2025 安装目录程序集，无需 ObjectARX SDK** | 2025+ |
 
-- **net8 产物无需改源码**：`BPPlot.cs` + `BpForm.cs` + `BpMenu.cs` 三个文件零修改即可编译（实测 0 错误，63488 B）。不要为"适配 2025"大改代码。
-- **net8 的唯一必需改动**：`App.Initialize()` 里加 `Encoding.RegisterProvider(CodePagesEncodingProvider.Instance)`（`#if NET8_0_OR_GREATER` 包裹）。缺这一行，PdfSharp 1.50 在 .NET 8 下 `Save()` 抛 `NotSupportedException`（缺 encoding 1252），`CropPdf`/`MergePdfs`/`BPSELFTEST` **全部静默失败**（只写 39 字节残废 PDF，且 `CropPdf` 的 `catch { return false; }` 让失败无声）。.NET Framework 产物不需要这行。
+- **net8 构建入口**：`build_net8.cmd` → `build/BPPlotNet8.csproj`（已随仓库提供，`ACAD_DIR` 环境变量可覆盖版本）。
+- **net8 产物无需改源码**：`BPPlot.cs` + `BpForm.cs` + `BpMenu.cs` 三个文件零修改即可编译。
+- **net8 必须的三项适配**（缺一分钟都不行，详见 `research/功能验证报告.md`）：
+  1. `App.Initialize()` 加 `Encoding.RegisterProvider(CodePagesEncodingProvider.Instance)`（`#if NET8_0_OR_GREATER` 包裹）——否则 `Save()` 抛 `NotSupportedException`（缺 encoding 1252）。
+  2. **PdfSharp 必须用 6.x**（`PackageReference`）——1.50 **无法解析 AutoCAD 2025 打印引擎产出的 PDF**，抛 `PdfReaderException: Invalid entry in XRef table`，裁切/合并全废。
+  3. csproj 设 **`<CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>`**——PdfSharp 6 依赖 8 个 `Microsoft.Extensions.*` 包，缺一个就在 `PdfDocument..ctor()` 抛 `FileNotFoundException`。
+- **这三项失败的共同表现是"静默"**：`CropPdf` 用 `catch { return false; }`，`MergePdfs` 失败只在日志提一句。**验证裁切是否真的生效，必须读 PDF 的 `/MediaBox`**（见 §5.5），不能信 CSV 的 `OK` 或日志的 `[crop]`。
+- **`.NET Framework` 产物这三点都不需要**（自带全部代码页、PdfSharp 1.50 够用、csc 无 NuGet 概念）。
 - **交付纪律**：能在本机实测的就说"已实测"；只能审阅的必须写"未编译验证"。**不得把"设计上应该可行"说成"已验证"**。
 
 `build.cmd` 必需引用：`acmgd.dll`、`acdbmgd.dll`、`accoremgd.dll`、`AcCui.dll`、`Autodesk.AutoCAD.Interop.dll`、`Autodesk.AutoCAD.Interop.Common.dll`、`libs/PdfSharp.dll`、`System.Windows.Forms.dll`、`System.Drawing.dll`。
@@ -327,6 +333,16 @@ for f in sorted(glob.glob('test/out_*/Sheet*.pdf')):
 
 **书签校验**：合并 PDF 的书签标题是 UTF-16BE 十六进制串，形如 `/Title<FEFF0053...>`。`Sheet001` → `0053 0068 0065 0065 0074 0030 0030 0031`。可解流后用正则提取，或直接 grep `/Title<FEFF` 数条数（应为页数）。
 
+**裁切是否生效的唯一可信判据 = `/MediaBox`**。以下三个信号**都不能**证明裁切成功：
+
+| 信号 | 为什么不可信 |
+|---|---|
+| CSV 里的 `OK` | 裁切在 CSV 写入之后单独执行，失败也不改状态 |
+| CSV 纸张列的 `->1189x845.7mm` | 这是**期望值**，由 `csvRowPatch` 在 `CropPdf` 返回 true 时才追加……但若裁切整体未执行（如 `crop` 判定为 false），列里就没有 `->`。有 `->` 基本可信，但仍建议核对字节 |
+| 日志的 `[crop] xxx -> 真实图幅` | 同上；失败时打的是 `[crop失败]`，中文在 UTF-16 日志里可能被吞，看起来像正常行 |
+
+**必须实测**：读 PDF 的 `/MediaBox` 换算成 mm，与 §5.5 表的期望值逐个比对。2026-10 在 AutoCAD 2025 上就是靠这个发现"PdfSharp 1.50 无法解析 2025 的 PDF"——CSV 全 `OK`、日志全 `[crop]`，但页尺寸仍是整张纸。
+
 **几何自洽校验（改比例逻辑时最有价值的检查）**：
 
 ```
@@ -384,6 +400,17 @@ for f in sorted(glob.glob('test/out_*/Sheet*.pdf')):
 21. **2025 的 `Application` 命名空间未变**：DESIGN.md 原写"2025 起 `Application` → `Autodesk.AutoCAD.ApplicationServices.Core`"，实测**不必改**——现有 `using Autodesk.AutoCAD.ApplicationServices;` 在 2025 下直接编译通过。
 22. **net8 工程引用 2025 程序集必须 `<Private>false</Private>`**：AutoCAD 宿主提供这些 DLL，若复制到输出目录会与宿主版本冲突。构建时 `MSB3277`（`AdWindows.dll` 等版本冲突）警告可忽略。
 23. **`LangVersion` 在 net8 工程里不要锁 C# 5**：C# 5 上限只是 `csc v4.0.30319` 的限制。net8 用 Roslyn，可自由使用现代语法——但**若要源码双轨共用，仍须保持 C# 5 可编译**，这是硬约束。
+24. **【PdfSharp 1.50 读不了 AutoCAD 2025 的 PDF】**：`PdfReaderException: Invalid entry in XRef table, ID=13, Generation=0, Position=...`。AutoCAD 2025 打印引擎生成的 xref 偏移量 1.50 解析不了（PDF 1.7、传统 xref 表、19KB 量级的小文件也会失败）。**net8 产物必须用 PdfSharp 6.x**；6.x 实测能正确读取（`pages=1, 2835×4008pt`）并完成裁切/合并。
+25. **【PdfSharp 6.x 有 8 个传递依赖】**：`Microsoft.Extensions.{Logging,Logging.Abstractions,DependencyInjection,DependencyInjection.Abstractions,Options,Primitives}`、`System.Diagnostics.DiagnosticSource`、`System.Runtime.CompilerServices.Unsafe`。缺任一个 → `PdfDocument..ctor()` 抛 `FileNotFoundException`。SDK 风格库工程**默认不复制** PackageReference 的 DLL，必须设 `<CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>`。部署时 13 个 DLL 必须同目录。
+26. **【确认缺陷】`BPL` 布局批量出图不可用**：报 `eLayoutNotCurrent` 后进程崩溃。根因是 `BpLayouts()` 遍历布局字典时**从不切换 `LayoutManager.Current.CurrentLayout`**，在模型空间上下文里对图纸空间布局 `BeginDocument`。这是既有代码缺陷（与 net8/2025 无关），2023 同样会失败，只因 `test/` 无布局用例从未暴露。修复需在循环内切布局并在 `finally` 恢复。
+27. **`USERS2` 预设会误触发"加载即出图"**：若 `.scr` 先 `(setvar "users2" "<dir>")` 再 `netload`，`App.Initialize` 会判定为 accoreconsole 场景并直接跑 `BPLOTAUTO`（可能崩溃）。**正确顺序：先 netload（USERS2 为空）→ 再设 USERS2 → 再执行目标命令**：
+    ```lisp
+    (setvar "users2" "")
+    (command "_.netload" "D:/path/BPPlot.dll")
+    (setvar "users2" "D:/output")
+    BPSPLIT
+    ```
+28. **`BP1` 不是"只打一个图框"**：它只是"不弹对话框、用 USERS1/USERS2 默认参数"，`CollectFrames` 仍会收集选择集里的**全部**图框。想只打一个就在选择时只选一个。
 
 ---
 

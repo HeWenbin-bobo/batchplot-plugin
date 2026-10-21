@@ -47,6 +47,15 @@ namespace BpPlot
     {
         public void Initialize()
         {
+            // .NET 8+（AutoCAD 2025 起）默认不内置 ANSI 代码页（1252/936 等），
+            // 而 PdfSharp 1.x 内部 Encoding.GetEncoding(1252) 会抛 NotSupportedException，
+            // 导致 CropPdf/MergePdfs/BPSELFTEST 的 Save() 全部静默失败（只写出空壳 PDF）。
+            // 这行只对 net8 产物生效；.NET Framework 产物走 #if 分支被排除。
+#if NET8_0_OR_GREATER
+            try { System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance); }
+            catch { }
+#endif
+
             // 图形界面：挂「BP-批量打印」菜单栏（重复 NETLOAD 自动去重）
             bool isConsole = false;
             try
