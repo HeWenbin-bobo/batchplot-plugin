@@ -145,15 +145,26 @@ batch/
 
 ### M8 平台适配：AutoCAD 2013–2027，双产物
 
-| 编译产物 | 工具链 | 引用 SDK | 覆盖版本 |
+> **2026-10 实测修订**（详见 `research/报告.md`）：本机已装 AutoCAD 2025，net8 产物已实际编译并加载成功。三条原假设被推翻：
+> ① **不需要** ObjectARX SDK —— 直接引用 AutoCAD 安装目录的 `acmgd/acdbmgd/accoremgd.dll` 即可编译；
+> ② **不需要** `#if ACAD_NET8` 别名层（约 10 处）—— 三个源文件**零修改**编译通过（0 错误，产物 63488 B）；
+> ③ **可本机验证**，不必等 2025+ 机器。
+> 唯一真实代码级障碍：**PdfSharp 1.50 在 .NET 8 下 `Save()` 抛 `NotSupportedException`（缺 encoding 1252）**，
+> 需在 `App.Initialize()` 加 `Encoding.RegisterProvider(CodePagesEncodingProvider.Instance)`（`#if NET8_0_OR_GREATER` 包裹）。
+> 修复前 `CropPdf`/`MergePdfs`/`BPSELFTEST` 全部静默失败（只写出 39 字节残废 PDF）；修复后实测 640 字节有效 PDF。
+
+| 编译产物 | 工具链 | 引用 | 覆盖版本 |
 |---|---|---|---|
-| `BPPlot.dll`（主产物） | csc v4.0.30319（.NET Framework 4.0） | **ObjectARX 2013** | **2013–2024** |
-| `BPPlot-net8.dll` | dotnet build（net8.0-windows） | ObjectARX 2025 | **2025–2027** |
+| `BPPlot.dll`（主产物） | csc v4.0.30319（.NET Framework 4.0） | **ObjectARX 2013**（或本机任一 2021–2024 安装） | **2013–2024** |
+| `BPPlot-net8.dll` | dotnet build（net8.0-windows） | **AutoCAD 2025 安装目录程序集**（无需 ObjectARX SDK） | **2025–2027** |
 
 - 2013 基线卡在两处边界：accoreconsole 2013 才引入（全支持域无头可用）；`DWG To PDF.pc3` 2010 起内置。对最老版本编译、向新版本前向加载是 Autodesk 官方路径
-- net8 构建：2025 起 `Application` → `Autodesk.AutoCAD.ApplicationServices.Core`，`#if ACAD_NET8` 别名层（约 10 处）；PdfSharp 双轨（主产物 1.x，net8 产物 6.x，源码共用）
-- Release 包含两对 DLL（各自配套 PdfSharp）+ 版本对照表
-- **验证边界（如实声明）**：本机仅 AutoCAD 2023——主产物在 2023 实测（证明 2013 基线前向加载成立）；net8 产物本机可编译（.NET 8 SDK + ObjectARX 2025 SDK，均免费），运行验证需 2025+ 机器
+- **硬分界**：2021–2024 程序集是 `.NETFramework 4.x`，2025 起是 `.NETCoreApp v8.0`。.NET Framework 的 `csc.exe` 无法引用 2025 程序集（`CS0012` / `CS0616`）
+- net8 构建要点：`<TargetFramework>net8.0-windows</TargetFramework>` + `<Private>false</Private>` 引用 2025 安装目录程序集；`LangVersion` 不设（默认 latest，不必迁就 C# 5）
+- PdfSharp 双轨：主产物 1.x（Framework 自带全部代码页，无需注册），net8 产物可用 1.50 + 编码注册（已验证）或升级 6.x
+- Release 包含两对 DLL（各自配套 PdfSharp）+ 版本对照表；`PackageContents.xml` 的 `SeriesMin/Max` 按产物分档（Framework `R24.0–R24.3` / net8 `R25.0+`）
+- **验证边界（2026-10 更新）**：本机 AutoCAD **2025**。net8 产物已实测：编译 0 错误、`netload` 加载成功、`Initialize` 执行、PdfSharp 保存通过。**未验证**：GUI 菜单/对话框/预览交互、端到端实际出图、2026–2027 版本
+- accoreconsole 2025 调用坑：**必须经 `cmd.exe` 包装**，Git Bash 直接调用会永久挂起（脚本不执行）；`/loadmodule` 不注册 `CommandMethod`，须用 `netload`
 - 功能矩阵：全支持域 GUI 全命令 ✅ / 无头 ✅ / PDF 管线 ✅（2013 起无版本缺口）
 
 ## 4. 实施分期
@@ -190,7 +201,7 @@ batch/
 - 多 DWG：合成 20 个小 DWG 目录批跑，校验失败清单与归并结果
 - `BPPLOT_KEEP_ORIG=1` 继续用于裁切/格式问题诊断
 
-## 7. v0.6 现状基线（新模块挂点）
+## 7. 现状基线（v0.6 → v0.7 新模块挂点）
 
 | 现有能力 | 位置 | 增强落点 |
 |---|---|---|

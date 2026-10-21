@@ -27,3 +27,12 @@ test/diag_report.txt
 
 # 编辑器备份
 *~HEAD
+
+# 研究/构建中间产物（research/ 下的源码与报告入库，构建输出不入库）
+research/**/bin/
+research/**/obj/
+research/runtime-test/*.log
+research/runtime-test/_probe.pdf
+research/runtime-test/*.dwg
+research/runtime-test/*.dll
+research/runtime-test/diag_result.txt

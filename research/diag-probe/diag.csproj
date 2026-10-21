@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>BPDiagNet8</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+  </PropertyGroup>
+  <ItemGroup><Compile Include="diag.cs" /></ItemGroup>
+  <ItemGroup>
+    <Reference Include="acmgd"><HintPath>D:\Program Files\Autodesk\AutoCAD 2025\acmgd.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="acdbmgd"><HintPath>D:\Program Files\Autodesk\AutoCAD 2025\acdbmgd.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="accoremgd"><HintPath>D:\Program Files\Autodesk\AutoCAD 2025\accoremgd.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+</Project>

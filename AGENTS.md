@@ -77,9 +77,18 @@ cmd /c build_diag.cmd     :: 产出 BPDiag.dll（诊断工具，独立编译）
 
 **实测环境差异（务必先读）**：
 
-- 本机（开发机）装的是 **AutoCAD 2025**（`D:\Program Files\Autodesk\AutoCAD 2025`），而 `build.cmd` / 各 `.cmd` / `.ps1` 里写的是 `D:\Program Files\AutoCAD 2023\AutoCAD 2023`——**不改路径直接跑会 CS0006 全量失败**。
-- 用 .NET Framework 的 `csc.exe` 引用 **2025** 的 `acmgd.dll / acdbmgd.dll / accoremgd.dll` 会报 `CS0012`（缺 `System.Runtime` 8.0）与 `CS0616`（`CommandMethodAttribute` 非特性类）——2025 的 managed 程序集是 net8 目标，.NET Framework csc 无法引用。这不是代码问题，是产物目标问题，对应 `docs/DESIGN.md` 的 **M8 net8 双产物**。
-- 因此：**在 2023/2024 机器上验证主产物，在 2025+ 机器上验证 net8 产物**。若本机只有 2025，只能做「源码语法/逻辑审阅 + 有 2023 环境时再实编译」的验证，交付时必须如实说明这一点，不得声称"已编译通过"。
+- 本机（开发机）装的是 **AutoCAD 2025**（`D:\Program Files\Autodesk\AutoCAD 2025`，R25.0.58.0），而 `build.cmd` / 各 `.cmd` / `.ps1` 里写的是 `D:\Program Files\AutoCAD 2023\AutoCAD 2023`——**不改路径直接跑会 CS0006 全量失败**。
+- 2021–2024 与 2025 是**硬分界**：前者的 managed 程序集是 `.NETFramework 4.x`，2025 起是 **`.NETCoreApp v8.0`**（已用 `TargetFrameworkAttribute` 实测确认）。.NET Framework 的 `csc.exe` 无法引用 2025 程序集（报 `CS0012` 缺 `System.Runtime` 8.0 / `CS0616` `CommandMethodAttribute` 非特性类）。这不是代码问题，是产物目标问题。
+- **两条已实测可行的产物路线**（详见 `research/报告.md`）：
+
+  | 产物 | 工具链 | 引用 | 覆盖 |
+  |---|---|---|---|
+  | `BPPlot.dll` | `csc.exe`（.NET Framework 4.0） | 2021–2024 安装目录程序集 | 2013–2024 |
+  | `BPPlotNet8.dll` | `dotnet build`（`net8.0-windows`） | **2025 安装目录程序集，无需 ObjectARX SDK** | 2025+ |
+
+- **net8 产物无需改源码**：`BPPlot.cs` + `BpForm.cs` + `BpMenu.cs` 三个文件零修改即可编译（实测 0 错误，63488 B）。不要为"适配 2025"大改代码。
+- **net8 的唯一必需改动**：`App.Initialize()` 里加 `Encoding.RegisterProvider(CodePagesEncodingProvider.Instance)`（`#if NET8_0_OR_GREATER` 包裹）。缺这一行，PdfSharp 1.50 在 .NET 8 下 `Save()` 抛 `NotSupportedException`（缺 encoding 1252），`CropPdf`/`MergePdfs`/`BPSELFTEST` **全部静默失败**（只写 39 字节残废 PDF，且 `CropPdf` 的 `catch { return false; }` 让失败无声）。.NET Framework 产物不需要这行。
+- **交付纪律**：能在本机实测的就说"已实测"；只能审阅的必须写"未编译验证"。**不得把"设计上应该可行"说成"已验证"**。
 
 `build.cmd` 必需引用：`acmgd.dll`、`acdbmgd.dll`、`accoremgd.dll`、`AcCui.dll`、`Autodesk.AutoCAD.Interop.dll`、`Autodesk.AutoCAD.Interop.Common.dll`、`libs/PdfSharp.dll`、`System.Windows.Forms.dll`、`System.Drawing.dll`。
 
@@ -259,6 +268,24 @@ runrealfix.cmd        :: real_fix.scr  → out_fix_real/（需 real.dwg）
 - 控制台里 `(command "_.netload")` 能加载程序集、能跑 `Initialize`，**但 `CommandMethod` 命令不注册**——所以无头自动化只能走「USERS2 触发 + 加载即出图」，不能指望在 `.scr` 里敲 `BPLOT`。
 - **`.scr` 的行尾必须有 CRLF**。当前 12 个 `.scr` 在 git 里存的是 LF，只有 `bundle_selftest.scr` 是 CRLF——因为 `.gitattributes` 里 `*.scr text` **没写 `eol`**，而本机 `core.autocrlf=true`：检出的磁盘文件是 CRLF（能跑），但 commit 进去的 blob 是 LF。**在别的机器/CI 上检出可能就是 LF → `.scr` 命令被 AutoCAD 当成一整行**。改 `.gitattributes` 为 `*.scr text eol=crlf` 可从根上修；在那之前，**提交前后都用 `git diff --stat -- *.scr` 确认没有意外的整文件行尾变更**（当前 `test/bundle_selftest.scr` 就有一处这种待提交差异）。
 - 相关坑：`git diff` 对 `.scr` 会显示"整个文件都改了"但其实只有行尾不同。用 `git diff --ignore-cr-at-eol` 或 `git cat-file -p HEAD:<file> | od -c` 确认真实差异。
+- **【2026-10 新增，已验证】accoreconsole 2025 必须经 `cmd.exe` 包装调用**。在 Git Bash 里直接跑 `accoreconsole.exe ... > log 2>&1` 会**永久挂起**：进程存活、日志停在 `命令:` 提示符、`.scr` 完全不执行、`_.quit _y` 无效、只能 `timeout` 强杀。根因是 Git Bash 的 POSIX 重定向与 accoreconsole 的 `Redirect stdout` 机制冲突。正确写法：
+
+  ```cmd
+  :: run.cmd
+  @echo off
+  set ACC=D:\Program Files\Autodesk\AutoCAD 2025\accoreconsole.exe
+  "%ACC%" /i "输入.dwg" /s "脚本.scr" > "日志.log" 2>&1
+  echo EXIT=%errorlevel%
+  ```
+  然后 `cmd //c run.cmd`（Git Bash 里）或直接双击。**2023 上未验证是否存在同样问题**——但那台机器的既有脚本都是 `.cmd` 包装，天然规避。
+- **诊断"脚本到底跑没跑"的可靠办法**：在 `.scr` 里写标记文件，别信日志
+  ```lisp
+  (setq f (open "D:/path/marker.txt" "w"))
+  (write-line "SCRIPT_RAN" f)
+  (close f)
+  ```
+  标记文件出现 = 脚本执行；否则是启动/重定向阶段就卡了。
+- **`/loadmodule <dll>` 不会注册 `CommandMethod`**（`Initialize` 会执行，但命令报"未知命令"）。必须用 `.scr` 里的 `(command "_.netload" "...")`。2025 已实测确认，与 2023 行为一致。
 
 ### 5.2 GUI 自动化（`.ps1`，走 COM）
 
@@ -353,6 +380,10 @@ for f in sorted(glob.glob('test/out_*/Sheet*.pdf')):
     - 用户勾选了"大框 A + 完全被 A 包含的小框 B"，B 会在这一步被静默剔掉（有 `WriteMessage` 提示剔除数量，但对话框里已勾选的事实让人以为会出）。
     
     这不是 bug 而是"自动去重"语义，但**改对话框（DESIGN M5 多行编辑/图号重编）时必须决定：出图顺序是听用户的还是听 `DropContained` 的**。当前是听 `DropContained`。
+20. **【PdfSharp + .NET 8 = 静默失败】**（AutoCAD 2025 路线必读）：`.NET 5+` 默认不内置 ANSI 代码页（1252/936/GBK），而 PdfSharp 1.50 内部 `Encoding.GetEncoding(1252)`。症状是 `PdfDocument` 构造成功、`AddPage` 成功，但 **`Save()` 抛 `NotSupportedException: No data is available for encoding 1252`**，只写出 39 字节废文件。因为 `CropPdf` 用 `catch { return false; }`，失败完全无声——用户只看到"PDF 没裁切"或"合并失败"。修复：`App.Initialize()` 开头 `Encoding.RegisterProvider(CodePagesEncodingProvider.Instance)`。**这是 net8 产物唯一必需的代码改动**。
+21. **2025 的 `Application` 命名空间未变**：DESIGN.md 原写"2025 起 `Application` → `Autodesk.AutoCAD.ApplicationServices.Core`"，实测**不必改**——现有 `using Autodesk.AutoCAD.ApplicationServices;` 在 2025 下直接编译通过。
+22. **net8 工程引用 2025 程序集必须 `<Private>false</Private>`**：AutoCAD 宿主提供这些 DLL，若复制到输出目录会与宿主版本冲突。构建时 `MSB3277`（`AdWindows.dll` 等版本冲突）警告可忽略。
+23. **`LangVersion` 在 net8 工程里不要锁 C# 5**：C# 5 上限只是 `csc v4.0.30319` 的限制。net8 用 Roslyn，可自由使用现代语法——但**若要源码双轨共用，仍须保持 C# 5 可编译**，这是硬约束。
 
 ---
 
