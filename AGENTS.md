@@ -238,6 +238,13 @@ CollectFrames(手选/自动识别) → DropContained(去重剔包含)
 
 **已知缺陷（合并模式）**：`MergePdfs` 遇到缺失文件会 `continue` 跳过，但调用方在成功路径打印的是 `todo.Count` 而非实际写入页数，且**成功时不输出 `mergeErr`**。所以"某页阶段二失败"时：CSV 标 `FAIL`、合并 PDF 少一页、日志仍报 `todo.Count 页,含书签`。要验证合并结果必须**独立数 PDF 页数**（见 §5.5），不能信日志。
 
+**已知缺陷（PlotEngine 空白页，2026-10 实测）**：某些图纸（已确认是天正/TArch 图纸）用 `PlotEngine` 出图会**静默产出空白页**——PDF 页面尺寸正确、CSV 记 `OK`，但内容流只有 `0.12 0 0 0.12 0 0 cm`，没有任何绘制算子。**同一图纸同窗口用原生 `-plot` 命令则完全正常（408KB vs 2.8KB）**。已排除 20+ 项（窗口/纸张/比例/旋转/图层/实体类型/颜色/字体/代理对象/`ShadePlot`/`CurrentLayout`/`INSBASE`/`DRAWORDER`/`wblock`/`saveas`/`AUDIT`/`REGEN`），并逐项复刻 `-plot` 的参数给 `PlotEngine` 仍为空白 → **是 API 本身失效，不是参数问题**。
+
+- **不要在无替代方案时"修参数"**：这不是调参能解决的，已实测穷尽。
+- **验证出图是否真的成功，必须解压 PDF 内容流看绘制算子**，不能只看文件大小/CSV/日志。PDF 的 `/FlateDecode` 是 zlib 封装，.NET 用 `ZLibStream`（.NET 6+）；用 `DeflateStream` 会把正常 PDF 误判成空。
+- **治本方案**：装天正插件或对象激活器（Object Enabler）。或改用 COM `IAcadPlot`（等价 `-plot`，但需 P/Invoke 绕过 .NET 8 移除了的 `Marshal.GetActiveObject`，且 accoreconsole 无 COM）。
+- 完整诊断报告见 `docs/PlotEngine空白页诊断报告.md`。
+
 ### 4.8 裁切触发条件（魔数，改前先理解）
 
 ```csharp
